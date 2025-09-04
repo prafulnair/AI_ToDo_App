@@ -56,9 +56,7 @@ pip install -r requirements.txt
 
 4. **Set up .env**
 ```env
-GEMINI_API_KEY=your_google_api_key
-GEMINI_MODEL=gemini-1.5-flash
-LOCAL_TZ=America/Toronto
+initialize api keys and api layer
 ```
 
 5. **Initialize database**
