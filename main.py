@@ -9,7 +9,7 @@ from services import TaskService
 from utils import parse_command
 
 svc = TaskService()
-svc.load()  # load tasks.json if present
+# svc.load()  # load tasks.json if present
 
 console = Console()
 console.print("[bold green]Smart Todo (Gemini) — CLI[/]  type 'help'")
@@ -30,7 +30,7 @@ while True:
     try:
         cmd, arg = parse_command(console.input("[bold cyan]todo>[/] ").strip())
         if cmd == "exit":
-            svc.save()
+            # svc.save()
             console.print("[dim]Saved. Bye![/]")
             break
         elif cmd == "help":
@@ -46,19 +46,19 @@ while True:
         elif cmd == "done":
             ok = svc.mark_done(arg)
             console.print("Marked done." if ok else "[red]Not found or already done[/]")
-            svc.save()
+            # svc.save()
         elif cmd == "delete":
             ok = svc.delete(arg)
             console.print("Deleted." if ok else "[red]Not found[/]")
-            svc.save()
+            # svc.save()
         elif cmd == "add":
             task = svc.add_task(arg)
             console.print(f"Added [bold]{task.text}[/] → {task.category} (p{task.priority})")
-            svc.save()
+            # svc.save()
         else:
             pass
     except KeyboardInterrupt:
-        svc.save()
+        # svc.save()
         console.print("\n[dim]Saved. Bye![/]")
         break
     except Exception as e:
