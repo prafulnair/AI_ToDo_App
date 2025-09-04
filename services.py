@@ -1,85 +1,56 @@
-from datetime import datetime, timedelta
+# services.py
+from datetime import datetime
 from typing import List, Optional
-from itertools import count
 
+from db import SessionLocal, init_db, TaskDB
 from models import Task
 from ai_client import categorize_and_enrich
 
-import json
-from datetime import datetime
-
-def _task_to_dict(t):
-    d = t.model_dump()
-    if d.get("due_dt"):
-        d["due_dt"] = t.due_dt.isoformat()
-    d["created_at"] = t.created_at.isoformat()
-    return d
-
-def _task_from_dict(d):
-    d = d.copy()
-    if d.get("due_dt"):
-        d["due_dt"] = datetime.fromisoformat(d["due_dt"])
-    d["created_at"] = datetime.fromisoformat(d["created_at"])
-    from models import Task
-    return Task(**d)
+init_db()
 
 class TaskService:
     def __init__(self):
-        self._id = count(1)
-        self._tasks: List[Task] = []
+        self.db = SessionLocal()
 
     def add_task(self, text: str) -> Task:
         meta = categorize_and_enrich(text)
-        task = Task(
-            id=next(self._id),
+        db_obj = TaskDB(
             text=text,
             category=meta["category"],
             priority=meta["priority"],
             due_dt=meta["due_dt"],
             created_at=datetime.now(),
         )
-        self._tasks.append(task)
-        return task
+        self.db.add(db_obj)
+        self.db.commit()
+        self.db.refresh(db_obj)
+        return Task.model_validate(db_obj.__dict__)
 
     def list_tasks(self, category: Optional[str] = None) -> List[Task]:
-        if not category:
-            return list(self._tasks)
-        cat = category.lower()
-        return [t for t in self._tasks if t.category == cat]
+        q = self.db.query(TaskDB)
+        if category:
+            q = q.filter(TaskDB.category == category)
+        return [Task.model_validate(obj.__dict__) for obj in q.all()]
 
     def list_immediate(self, cutoff: datetime) -> List[Task]:
-        return [
-            t for t in self._tasks
-            if t.status == "open" and (
-                (t.due_dt and t.due_dt <= cutoff) or t.priority >= 4
-            )
-        ]
+        q = self.db.query(TaskDB).filter(
+            (TaskDB.status == "open") &
+            ((TaskDB.due_dt != None) & (TaskDB.due_dt <= cutoff) | (TaskDB.priority >= 4))
+        )
+        return [Task.model_validate(obj.__dict__) for obj in q.all()]
+
     def mark_done(self, task_id: int) -> bool:
-        for t in self._tasks:
-            if t.id == task_id and t.status == "open":
-                t.status = "done"
-                return True
+        obj = self.db.query(TaskDB).filter(TaskDB.id == task_id).first()
+        if obj and obj.status == "open":
+            obj.status = "done"
+            self.db.commit()
+            return True
         return False
 
     def delete(self, task_id: int) -> bool:
-        before = len(self._tasks)
-        self._tasks = [t for t in self._tasks if t.id != task_id]
-        return len(self._tasks) < before
-
-    def save(self, path: str = "tasks.json") -> None:
-        data = [_task_to_dict(t) for t in self._tasks]
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-    def load(self, path: str = "tasks.json") -> int:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except FileNotFoundError:
-            return 0
-        self._tasks = [_task_from_dict(d) for d in data]
-        # reset id counter to max+1
-        if self._tasks:
-            from itertools import count
-            self._id = count(max(t.id for t in self._tasks) + 1)
-        return len(self._tasks)
+        obj = self.db.query(TaskDB).filter(TaskDB.id == task_id).first()
+        if obj:
+            self.db.delete(obj)
+            self.db.commit()
+            return True
+        return False
