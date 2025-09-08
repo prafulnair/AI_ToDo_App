@@ -1,6 +1,6 @@
 # db.py
 import os
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from datetime import datetime
 
@@ -19,6 +19,9 @@ class TaskDB(Base):
     due_dt = Column(DateTime, nullable=True)
     status = Column(String(20), default="open")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # NEW: per-visitor isolation without login
+    session_id = Column(String(64), index=True, nullable=False, default="public")
 
 def init_db():
     Base.metadata.create_all(bind=engine)

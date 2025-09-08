@@ -6,3 +6,34 @@ __pycache__/
 .DS_Store
 .env
 .env.*
+# Frontend dependencies
+frontend/node_modules/
+
+# Build outputs
+frontend/dist/
+frontend/build/
+
+# Logs
+frontend/npm-debug.log*
+frontend/pnpm-debug.log*
+frontend/yarn-error.log*
+
+# Environment files
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+
+# If you only want to keep npm lock file
+# (ignore yarn.lock just in case someone uses yarn locally)
+/frontend/yarn.lock

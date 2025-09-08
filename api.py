@@ -1,32 +1,34 @@
 # api.py
-from fastapi import FastAPI, HTTPException, Query
-from typing import Optional, List
+from fastapi import FastAPI, HTTPException, Query, Header
+from typing import Optional
 from datetime import datetime, timedelta
-from services import TaskService
 from pydantic import BaseModel
 
-app = FastAPI(title="Smart Todo (Gemini)")
+from services import TaskService
 
-svc = TaskService()  # in-memory for now
+app = FastAPI(title="Smart Todo (Gemini)")
 
 class AddReq(BaseModel):
     text: str
 
+def svc_for(session_id: str) -> TaskService:
+    return TaskService(session_id=session_id or "public")
+
 @app.post("/tasks")
-def add_task(req: AddReq):
+def add_task(req: AddReq, x_session_id: str = Header(default="public", alias="X-Session-Id")):
     try:
-        task = svc.add_task(req.text)  # uses ai_client inside
+        task = svc_for(x_session_id).add_task(req.text)
         return task.model_dump()
     except Exception as e:
         raise HTTPException(500, str(e))
 
 @app.get("/tasks")
-def list_tasks(category: Optional[str] = Query(None)):
-    tasks = svc.list_tasks(category=category)
+def list_tasks(category: Optional[str] = Query(None), x_session_id: str = Header(default="public", alias="X-Session-Id")):
+    tasks = svc_for(x_session_id).list_tasks(category=category)
     return [t.model_dump() for t in tasks]
 
 @app.get("/tasks/immediate")
-def list_immediate(hours: int = 24):
+def list_immediate(hours: int = 24, x_session_id: str = Header(default="public", alias="X-Session-Id")):
     cutoff = datetime.now() + timedelta(hours=hours)
-    tasks = svc.list_immediate(cutoff=cutoff)
+    tasks = svc_for(x_session_id).list_immediate(cutoff=cutoff)
     return [t.model_dump() for t in tasks]

@@ -8,8 +8,9 @@ from rich.table import Table
 from services import TaskService
 from utils import parse_command
 
-svc = TaskService()
-# svc.load()  # load tasks.json if present
+# 👇 Give the CLI a dedicated session
+CLI_SESSION = "local"
+svc = TaskService(session_id=CLI_SESSION)
 
 console = Console()
 console.print("[bold green]Smart Todo (Gemini) — CLI[/]  type 'help'")
