@@ -1,101 +1,104 @@
-// import { useState } from 'react'
-// import reactLogo from './assets/react.svg'
-// import viteLogo from '/vite.svg'
-// import './App.css'
+import React, { useEffect, useMemo, useState } from "react";
+import Interactor from "./components/Interactor";
+import AIResponse from "./components/AIResponse";
+import TaskBoard from "./components/TaskBoard";
+import type { Task } from "./types/types";
+import { ensureSessionId } from "./utils/session";
 
-// function App() {
-//   const [count, setCount] = useState(0)
+// TODO: set this to your deployed backend later
+const BACKEND_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-//   return (
-//     <>
-//       <div>
-//         <a href="https://vite.dev" target="_blank">
-//           <img src={viteLogo} className="logo" alt="Vite logo" />
-//         </a>
-//         <a href="https://react.dev" target="_blank">
-//           <img src={reactLogo} className="logo react" alt="React logo" />
-//         </a>
-//       </div>
-//       <h1>Vite + React</h1>
-//       <div className="card">
-//         <button onClick={() => setCount((count) => count + 1)}>
-//           count is {count}
-//         </button>
-//         <p>
-//           Edit <code>src/App.tsx</code> and save to test HMR
-//         </p>
-//       </div>
-//       <p className="read-the-docs">
-//         Click on the Vite and React logos to learn more
-//       </p>
-//     </>
-//   )
-// }
+export default function App() {
+  const sessionId = useMemo(() => ensureSessionId(), []);
+  const [aiMsg, setAiMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [tasks, setTasks] = useState<Task[]>([
+    // mock seed (looks good while wiring)
+    {
+      id: 1, text: "Finish API doc", category: "work", priority: 4,
+      due_dt: null, status: "open", created_at: new Date().toISOString()
+    },
+    {
+      id: 2, text: "Buy groceries", category: "personal", priority: 3,
+      due_dt: null, status: "open", created_at: new Date().toISOString()
+    },
+  ]);
 
-// export default App
-// src/App.tsx
-import React, { useState } from "react";
+  // fetch tasks (will replace mock once backend is ready)
+  async function fetchTasks() {
+    const res = await fetch(`${BACKEND_URL}/tasks`, {
+      headers: { "X-Session-Id": sessionId },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setTasks(data);
+    }
+  }
 
-function App() {
-  const [response, setResponse] = useState<string>("");
+  useEffect(() => {
+    // comment out this call until backend is running locally
+    // fetchTasks();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setResponse("✅ Added to Work — due tomorrow 2pm, priority 4"); // mock AI response
-  };
+  async function handleInteractor(text: string) {
+    setLoading(true);
+    setAiMsg("");
+    try {
+      // naive rule: everything goes to /tasks add for now
+      const res = await fetch(`${BACKEND_URL}/tasks`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-Id": sessionId,
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(err || "Failed to add");
+      }
+
+      const created: Task = await res.json();
+      // show a tiny AI message from created task details
+      setAiMsg(`✅ Added to ${created.category} — ${created.due_dt ? `due ${new Date(created.due_dt).toLocaleString()}, ` : ""}priority ${created.priority}`);
+      // optimistically add to UI
+      setTasks((prev) => [created, ...prev]);
+    } catch (e: any) {
+      setAiMsg(`⚠️ ${e.message || "Something went wrong"}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openCategory(cat: Task["category"]) {
+    // Placeholder: in v2 you can route to /category/:cat or open a modal
+    setAiMsg(`Showing all in ${cat.toUpperCase()}`);
+  }
 
   return (
-    <div className="h-screen flex bg-gray-50">
-      {/* Left column: Assistant input */}
-      <div className="w-1/3 border-r border-gray-200 p-6 flex flex-col">
-        <h1 className="text-2xl font-bold mb-6">Smart AI Task Manager</h1>
-
-        <form onSubmit={handleSubmit} className="flex mb-4">
-          <input
-            type="text"
-            placeholder="Type a task..."
-            className="flex-1 px-4 py-2 border rounded-l-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button
-            type="submit"
-            className="px-4 py-2 bg-blue-600 text-white rounded-r-lg hover:bg-blue-700"
-          >
-            Add
-          </button>
-        </form>
-
-        {response && (
-          <div className="bg-green-50 border border-green-300 text-green-800 px-3 py-2 rounded-md text-sm">
-            {response}
-          </div>
-        )}
-      </div>
-
-      {/* Right column: Task Board */}
-      <div className="flex-1 p-6 grid grid-cols-3 gap-4">
-        <div className="bg-white shadow rounded-lg p-4">
-          <h2 className="font-semibold text-lg mb-2">Work</h2>
-          <ul className="space-y-2 text-sm">
-            <li className="border rounded px-2 py-1">Finish API doc</li>
-          </ul>
+    <div className="h-screen bg-gray-50">
+      {/* Header */}
+      <header className="px-6 py-4 bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <h1 className="text-xl font-semibold">Smart AI Task Manager</h1>
+          <div className="text-xs text-gray-500">Session: {sessionId.slice(0, 8)}…</div>
         </div>
+      </header>
 
-        <div className="bg-white shadow rounded-lg p-4">
-          <h2 className="font-semibold text-lg mb-2">Personal</h2>
-          <ul className="space-y-2 text-sm">
-            <li className="border rounded px-2 py-1">Buy groceries</li>
-          </ul>
-        </div>
+      <main className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Left: Interactor + AI message */}
+        <section>
+          <Interactor onSubmit={handleInteractor} loading={loading} />
+          <AIResponse message={aiMsg} />
+        </section>
 
-        <div className="bg-white shadow rounded-lg p-4">
-          <h2 className="font-semibold text-lg mb-2">Health</h2>
-          <ul className="space-y-2 text-sm">
-            <li className="border rounded px-2 py-1">Gym at 7am</li>
-          </ul>
-        </div>
-      </div>
+        {/* Right: Dynamic board */}
+        <section>
+          <TaskBoard tasks={tasks} onOpenCategory={openCategory} />
+        </section>
+      </main>
     </div>
   );
 }
-
-export default App;
