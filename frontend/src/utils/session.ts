@@ -1,10 +1,9 @@
-const KEY = "smarttodo_session_id";
-
-export function ensureSessionId(): string {
-  let s = localStorage.getItem(KEY);
-  if (!s) {
-    s = crypto.randomUUID();
-    localStorage.setItem(KEY, s);
+export function getOrCreateSessionId(): string {
+  const key = 'smarttodo_session_id';
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(key, id);
   }
-  return s;
+  return id;
 }

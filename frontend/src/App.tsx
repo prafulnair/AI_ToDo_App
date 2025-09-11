@@ -1,104 +1,89 @@
-import React, { useEffect, useMemo, useState } from "react";
-import Interactor from "./components/Interactor";
-import AIResponse from "./components/AIResponse";
-import TaskBoard from "./components/TaskBoard";
-import type { Task } from "./types/types";
-import { ensureSessionId } from "./utils/session";
+import React, { useMemo, useState } from "react";
+import { TerminalWindow } from "./components/TerminalWindow";
+import { Terminal } from "./components/Terminal";
+import { TaskBoard } from "./components/TaskBoard";
+import type { Task, Category } from "./types";
+import { getOrCreateSessionId } from "./utils/session";
 
-// TODO: set this to your deployed backend later
-const BACKEND_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+let nextId = 1;
 
-export default function App() {
-  const sessionId = useMemo(() => ensureSessionId(), []);
-  const [aiMsg, setAiMsg] = useState("");
-  const [loading, setLoading] = useState(false);
+function mockCategorize(text: string): { category: Category | "isolated"; priority: number; due?: string | null } {
+  const t = text.toLowerCase();
+  const has = (arr: string[]) => arr.some((k) => t.includes(k));
+  if (has(["meeting", "report", "api", "doc", "deploy"])) return { category: "work", priority: 4, due: extractDue(t) };
+  if (has(["gym", "run", "workout", "yoga"])) return { category: "health", priority: 3, due: extractDue(t) };
+  if (has(["resume", "interview", "leetcode", "career"])) return { category: "career", priority: 4, due: extractDue(t) };
+  if (has(["buy", "grocery", "groceries", "errand", "renew", "pay"])) return { category: "errands", priority: 2, due: extractDue(t) };
+  if (has(["show"])) return { category: "isolated", priority: 3 };
+  return { category: "personal", priority: 3, due: extractDue(t) };
+}
+function extractDue(t: string): string | null {
+  if (t.includes("tomorrow") && t.match(/\b\d{1,2}(?::\d{2})?\s?(am|pm)\b/)) return `tomorrow ${t.match(/\b\d{1,2}(?::\d{2})?\s?(am|pm)\b/)![0]}`;
+  if (t.match(/\b\d{1,2}(?::\d{2})?\s?(am|pm)\b/)) return t.match(/\b\d{1,2}(?::\d{2})?\s?(am|pm)\b/)![0];
+  if (t.includes("tomorrow")) return "tomorrow";
+  return null;
+}
+
+const App: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([
-    // mock seed (looks good while wiring)
-    {
-      id: 1, text: "Finish API doc", category: "work", priority: 4,
-      due_dt: null, status: "open", created_at: new Date().toISOString()
-    },
-    {
-      id: 2, text: "Buy groceries", category: "personal", priority: 3,
-      due_dt: null, status: "open", created_at: new Date().toISOString()
-    },
+    { id: nextId++, text: "Finish API doc", category: "work", priority: 4, due: "17:30", createdAt: new Date().toISOString() },
+    { id: nextId++, text: "Buy groceries", category: "errands", priority: 2, due: null, createdAt: new Date().toISOString() },
+    { id: nextId++, text: "Gym at 7am", category: "health", priority: 3, due: "7:00am", createdAt: new Date().toISOString() },
   ]);
+  const [isolated, setIsolated] = useState<Task | null>(null);
+  const sessionId = useMemo(() => getOrCreateSessionId(), []);
 
-  // fetch tasks (will replace mock once backend is ready)
-  async function fetchTasks() {
-    const res = await fetch(`${BACKEND_URL}/tasks`, {
-      headers: { "X-Session-Id": sessionId },
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setTasks(data);
+  const onCommand = (cmd: string): string[] => {
+    const lower = cmd.toLowerCase().trim();
+    if (lower === "help") {
+      return [
+        "Commands:",
+        "  add <text>           → create a task",
+        "  show                 → show all tasks",
+        "  clear                → clear the terminal",
+        "Examples:",
+        "  add meeting tomorrow at 2pm",
+        "  add gym at 7am",
+        "  show",
+      ];
     }
-  }
-
-  useEffect(() => {
-    // comment out this call until backend is running locally
-    // fetchTasks();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function handleInteractor(text: string) {
-    setLoading(true);
-    setAiMsg("");
-    try {
-      // naive rule: everything goes to /tasks add for now
-      const res = await fetch(`${BACKEND_URL}/tasks`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Session-Id": sessionId,
-        },
-        body: JSON.stringify({ text }),
-      });
-
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(err || "Failed to add");
-      }
-
-      const created: Task = await res.json();
-      // show a tiny AI message from created task details
-      setAiMsg(`✅ Added to ${created.category} — ${created.due_dt ? `due ${new Date(created.due_dt).toLocaleString()}, ` : ""}priority ${created.priority}`);
-      // optimistically add to UI
-      setTasks((prev) => [created, ...prev]);
-    } catch (e: any) {
-      setAiMsg(`⚠️ ${e.message || "Something went wrong"}`);
-    } finally {
-      setLoading(false);
+    if (lower.startsWith("add ")) {
+      const text = cmd.slice(4).trim();
+      const meta = mockCategorize(text);
+      if (meta.category === "isolated") return ["Could not categorize. Try again."];
+      const t: Task = { id: nextId++, text, category: meta.category, priority: meta.priority, due: meta.due || null, createdAt: new Date().toISOString() };
+      setTasks((p) => [t, ...p]);
+      setIsolated(meta.category === "personal" && !meta.due ? t : null);
+      return [`✅ Added to ${t.category[0].toUpperCase() + t.category.slice(1)} — ${t.due ? `due ${t.due}, ` : ""}priority ${t.priority}`];
     }
-  }
-
-  function openCategory(cat: Task["category"]) {
-    // Placeholder: in v2 you can route to /category/:cat or open a modal
-    setAiMsg(`Showing all in ${cat.toUpperCase()}`);
-  }
+    if (lower === "show" || lower.startsWith("show ")) {
+      setIsolated(null);
+      return [`📋 Showing tasks for session ${sessionId.slice(0, 8)}…`];
+    }
+    const meta = mockCategorize(cmd);
+    if (meta.category === "isolated") { setIsolated(null); return ["Showing tasks…"]; }
+    const t: Task = { id: nextId++, text: cmd, category: meta.category, priority: meta.priority, due: meta.due || null, createdAt: new Date().toISOString() };
+    setTasks((p) => [t, ...p]);
+    setIsolated(meta.category === "personal" && !meta.due ? t : null);
+    return [`✅ Added to ${t.category[0].toUpperCase() + t.category.slice(1)} — ${t.due ? `due ${t.due}, ` : ""}priority ${t.priority}`];
+  };
 
   return (
-    <div className="h-screen bg-gray-50">
-      {/* Header */}
-      <header className="px-6 py-4 bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <h1 className="text-xl font-semibold">Smart AI Task Manager</h1>
-          <div className="text-xs text-gray-500">Session: {sessionId.slice(0, 8)}…</div>
+    <div className="h-screen w-screen bg-[linear-gradient(180deg,#0b1020,#0b0f1a)]">
+      <div className="h-full w-full flex">
+        {/* Left: terminal */}
+        <div className="w-1/2 h-full flex">
+          <TerminalWindow>
+            <Terminal onCommand={onCommand} />
+          </TerminalWindow>
         </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Left: Interactor + AI message */}
-        <section>
-          <Interactor onSubmit={handleInteractor} loading={loading} />
-          <AIResponse message={aiMsg} />
-        </section>
-
-        {/* Right: Dynamic board */}
-        <section>
-          <TaskBoard tasks={tasks} onOpenCategory={openCategory} />
-        </section>
-      </main>
+        {/* Right: task board */}
+<div className="w-1/2 h-full bg-slate-50">
+  <TaskBoard tasks={tasks} isolatedTask={isolated} />
+</div>
+      </div>
     </div>
   );
-}
+};
+
+export default App;
