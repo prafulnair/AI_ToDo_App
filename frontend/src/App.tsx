@@ -1,89 +1,154 @@
-import React, { useMemo, useState } from "react";
-import { TerminalWindow } from "./components/TerminalWindow";
-import { Terminal } from "./components/Terminal";
-import { TaskBoard } from "./components/TaskBoard";
-import type { Task, Category } from "./types";
-import { getOrCreateSessionId } from "./utils/session";
+import { useState } from "react";
+import InputArea from "./components/InputArea/InputArea";
+import CategoryCard from "./components/CategoryCard/CategoryCard";
+import TaskCard from "./components/TaskCard/TaskCard";
+import Modal from "./components/Modal/Modal";
 
-let nextId = 1;
+// Types
+import type { Task, Category } from "./types/task";
 
-function mockCategorize(text: string): { category: Category | "isolated"; priority: number; due?: string | null } {
-  const t = text.toLowerCase();
-  const has = (arr: string[]) => arr.some((k) => t.includes(k));
-  if (has(["meeting", "report", "api", "doc", "deploy"])) return { category: "work", priority: 4, due: extractDue(t) };
-  if (has(["gym", "run", "workout", "yoga"])) return { category: "health", priority: 3, due: extractDue(t) };
-  if (has(["resume", "interview", "leetcode", "career"])) return { category: "career", priority: 4, due: extractDue(t) };
-  if (has(["buy", "grocery", "groceries", "errand", "renew", "pay"])) return { category: "errands", priority: 2, due: extractDue(t) };
-  if (has(["show"])) return { category: "isolated", priority: 3 };
-  return { category: "personal", priority: 3, due: extractDue(t) };
-}
-function extractDue(t: string): string | null {
-  if (t.includes("tomorrow") && t.match(/\b\d{1,2}(?::\d{2})?\s?(am|pm)\b/)) return `tomorrow ${t.match(/\b\d{1,2}(?::\d{2})?\s?(am|pm)\b/)![0]}`;
-  if (t.match(/\b\d{1,2}(?::\d{2})?\s?(am|pm)\b/)) return t.match(/\b\d{1,2}(?::\d{2})?\s?(am|pm)\b/)![0];
-  if (t.includes("tomorrow")) return "tomorrow";
-  return null;
-}
-
-const App: React.FC = () => {
-  const [tasks, setTasks] = useState<Task[]>([
-    { id: nextId++, text: "Finish API doc", category: "work", priority: 4, due: "17:30", createdAt: new Date().toISOString() },
-    { id: nextId++, text: "Buy groceries", category: "errands", priority: 2, due: null, createdAt: new Date().toISOString() },
-    { id: nextId++, text: "Gym at 7am", category: "health", priority: 3, due: "7:00am", createdAt: new Date().toISOString() },
+function App() {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [categories, setCategories] = useState<Category[]>([
+    {
+      name: "Work",
+      tasks: [
+        {
+          id: "w1",
+          title: "Finish project draft",
+          isDone: false,
+          createdAt: new Date(),
+        },
+        {
+          id: "w2",
+          title: "Email Stephanie",
+          isDone: true,
+          createdAt: new Date(),
+        },
+      ],
+    },
+    {
+      name: "Health",
+      tasks: [
+        {
+          id: "h1",
+          title: "Yoga at 7pm",
+          isDone: false,
+          createdAt: new Date(),
+        },
+      ],
+    },
   ]);
-  const [isolated, setIsolated] = useState<Task | null>(null);
-  const sessionId = useMemo(() => getOrCreateSessionId(), []);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
-  const onCommand = (cmd: string): string[] => {
-    const lower = cmd.toLowerCase().trim();
-    if (lower === "help") {
-      return [
-        "Commands:",
-        "  add <text>           → create a task",
-        "  show                 → show all tasks",
-        "  clear                → clear the terminal",
-        "Examples:",
-        "  add meeting tomorrow at 2pm",
-        "  add gym at 7am",
-        "  show",
-      ];
+  const handleTaskSubmit = (text: string) => {
+    const newTask: Task = {
+      id: Date.now().toString(),
+      title: text,
+      isDone: false,
+      createdAt: new Date(),
+    };
+
+    // Randomly assign: isolated OR category
+    const random = Math.random();
+    if (random < 0.5) {
+      // Add to isolated tasks
+      setTasks((prev) => [...prev, newTask]);
+    } else {
+      // Add to a random category
+      setCategories((prev) => {
+        if (prev.length === 0) return prev;
+        const randomIndex = Math.floor(Math.random() * prev.length);
+        const updated = [...prev];
+        updated[randomIndex] = {
+          ...updated[randomIndex],
+          tasks: [...updated[randomIndex].tasks, newTask],
+        };
+        return updated;
+      });
     }
-    if (lower.startsWith("add ")) {
-      const text = cmd.slice(4).trim();
-      const meta = mockCategorize(text);
-      if (meta.category === "isolated") return ["Could not categorize. Try again."];
-      const t: Task = { id: nextId++, text, category: meta.category, priority: meta.priority, due: meta.due || null, createdAt: new Date().toISOString() };
-      setTasks((p) => [t, ...p]);
-      setIsolated(meta.category === "personal" && !meta.due ? t : null);
-      return [`✅ Added to ${t.category[0].toUpperCase() + t.category.slice(1)} — ${t.due ? `due ${t.due}, ` : ""}priority ${t.priority}`];
-    }
-    if (lower === "show" || lower.startsWith("show ")) {
-      setIsolated(null);
-      return [`📋 Showing tasks for session ${sessionId.slice(0, 8)}…`];
-    }
-    const meta = mockCategorize(cmd);
-    if (meta.category === "isolated") { setIsolated(null); return ["Showing tasks…"]; }
-    const t: Task = { id: nextId++, text: cmd, category: meta.category, priority: meta.priority, due: meta.due || null, createdAt: new Date().toISOString() };
-    setTasks((p) => [t, ...p]);
-    setIsolated(meta.category === "personal" && !meta.due ? t : null);
-    return [`✅ Added to ${t.category[0].toUpperCase() + t.category.slice(1)} — ${t.due ? `due ${t.due}, ` : ""}priority ${t.priority}`];
+  };
+
+  const handleTaskClick = (task: Task) => {
+    setSelectedTask(task);
+  };
+
+  const handleTaskDone = (id: string) => {
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, isDone: true } : t))
+    );
+    setCategories((prev) =>
+      prev.map((c) => ({
+        ...c,
+        tasks: c.tasks.map((t) =>
+          t.id === id ? { ...t, isDone: true } : t
+        ),
+      }))
+    );
+    setSelectedTask(null);
+  };
+
+  const handleTaskDelete = (id: string) => {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    setCategories((prev) =>
+      prev.map((c) => ({
+        ...c,
+        tasks: c.tasks.filter((t) => t.id !== id),
+      }))
+    );
+    setSelectedTask(null);
   };
 
   return (
-    <div className="h-screen w-screen bg-[linear-gradient(180deg,#0b1020,#0b0f1a)]">
-      <div className="h-full w-full flex">
-        {/* Left: terminal */}
-        <div className="w-1/2 h-full flex">
-          <TerminalWindow>
-            <Terminal onCommand={onCommand} />
-          </TerminalWindow>
-        </div>
-        {/* Right: task board */}
-<div className="w-1/2 h-full bg-slate-50">
-  <TaskBoard tasks={tasks} isolatedTask={isolated} />
-</div>
+    <div className="grid grid-cols-3 h-screen bg-gray-100 dark:bg-gray-900">
+      {/* Left: Input */}
+      <div className="col-span-1 border-r border-gray-200 dark:border-gray-700 flex items-center justify-center bg-white dark:bg-gray-800">
+        <InputArea onTaskSubmit={handleTaskSubmit} />
+      </div>
+
+      {/* Right: Task board */}
+      <div className="col-span-2 p-6 overflow-y-auto space-y-4 relative">
+        {/* Empty state */}
+        {categories.length === 0 && tasks.length === 0 && (
+          <p className="text-gray-500 text-center">No tasks yet. Add one!</p>
+        )}
+
+        {/* Isolated tasks */}
+        {tasks.map((task) => (
+          <TaskCard
+            key={task.id}
+            task={task}
+            onDone={handleTaskDone}
+            onDelete={handleTaskDelete}
+          />
+        ))}
+
+        {/* Category cards */}
+        {categories.map((cat) => (
+          <CategoryCard
+            key={cat.name}
+            name={cat.name}
+            tasks={cat.tasks}
+            onTaskClick={handleTaskClick}
+          />
+        ))}
+
+        {/* Overlay TaskCard when a task is selected */}
+        {/* Overlay TaskCard when a task is selected */}
+{/* Overlay TaskCard when a task is selected */}
+{selectedTask && (
+  <Modal onClose={() => setSelectedTask(null)}>
+    <TaskCard
+      task={selectedTask}
+      onDone={handleTaskDone}
+      onDelete={handleTaskDelete}
+      onClose={() => setSelectedTask(null)}
+    />
+  </Modal>
+)}
       </div>
     </div>
   );
-};
+}
 
 export default App;
