@@ -1,15 +1,13 @@
 # ai_client.py
-import os, json
+import os, json, re
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Sequence, Tuple
+import difflib
 
 import google.generativeai as genai
-from utils import safe_category
 import dateparser
-from datetime import datetime
-import os
-
 from dotenv import load_dotenv
+
 load_dotenv()
 
 TZ = os.getenv("LOCAL_TZ", "America/Toronto")
@@ -17,12 +15,15 @@ now_iso = datetime.now().isoformat()
 _MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 
+# -------------------------
+# Helpers
+# -------------------------
+
 def _get_resp_text(resp: Any) -> str:
     """Robustly extract text from a Gemini response object."""
     txt = (getattr(resp, "text", None) or "").strip()
     if txt:
         return txt
-    # Fallback extraction path used by some SDK versions
     try:
         cand = resp.candidates[0]
         parts = getattr(cand, "content", cand).parts
@@ -36,25 +37,94 @@ def _parse_due_iso(s: Optional[str]) -> Optional[datetime]:
     if not s:
         return None
     s = s.strip()
-    # Handle trailing Z
     if s.endswith("Z"):
         s = s.replace("Z", "+00:00")
     try:
         return datetime.fromisoformat(s)
     except Exception:
-        # As a secondary parse path, accept natural-ish ISO-like strings
         dt = dateparser.parse(s, settings={"PREFER_DATES_FROM": "future"})
         return dt
 
 
-def categorize_and_enrich(text: str) -> Dict[str, Any]:
+def _norm(s: str) -> str:
+    """Lightweight normalization for category strings."""
+    s = (s or "").strip().lower()
+    s = re.sub(r"[_\-\s]+", " ", s)
+    s = re.sub(r"[^\w\s]", "", s)
+    return s
+
+
+# A tiny alias/synonym map to nudge close matches
+_SYNONYMS = {
+    "exercise": "health",
+    "fitness": "health",
+    "gym": "health",
+    "workout": "health",
+    "wellness": "health",
+    "meeting": "work",
+    "office": "work",
+    "job": "work",
+    "career": "work",     # depending on how you want to split, map to "work"
+    "errands": "errand",
+    "shopping": "errand",
+    "groceries": "errand",
+    "school": "personal",
+    "study": "personal",
+}
+
+
+def _closest_existing(
+    proposed: str, existing: Sequence[str], threshold: float = 0.72
+) -> Optional[str]:
+    """
+    Returns an existing category name if it's sufficiently similar to 'proposed'.
+    Uses difflib ratio + synonym nudges.
+    """
+    if not proposed or not existing:
+        return None
+
+    p_norm = _norm(proposed)
+    # Synonym direct map
+    if p_norm in _SYNONYMS and _SYNONYMS[p_norm] in { _norm(e) for e in existing }:
+        # Return the *actual* casing from existing
+        target_norm = _SYNONYMS[p_norm]
+        for e in existing:
+            if _norm(e) == target_norm:
+                return e
+
+    # Fuzzy match
+    best: Tuple[float, Optional[str]] = (0.0, None)
+    for e in existing:
+        ratio = difflib.SequenceMatcher(None, p_norm, _norm(e)).ratio()
+        if ratio > best[0]:
+            best = (ratio, e)
+    if best[0] >= threshold:
+        return best[1]
+    return None
+
+
+# -------------------------
+# Gemini call
+# -------------------------
+
+def categorize_and_enrich(
+    text: str,
+    existing_categories: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
     """
     Calls Gemini to classify the task and infer priority/due date.
+    Supports dynamic categories by passing in current existing categories.
+    The model either selects one of the existing categories (if appropriate)
+    or proposes a new category (<= 3 words). We then post-process to map
+    similar proposals back to an existing category using fuzzy matching.
+
     Returns:
         {
-          "category": "work|personal|health|career|errand",
+          "category": str,           # final category (existing or new)
           "priority": int (1..5),
-          "due_dt": datetime | None
+          "due_dt": datetime | None,
+          "raw_category": str,       # model's proposed category (for debugging/telemetry)
+          "used_existing": bool      # whether it mapped to an existing one
         }
     Raises:
         RuntimeError on API/config/JSON/validation errors.
@@ -69,18 +139,17 @@ def categorize_and_enrich(text: str) -> Dict[str, Any]:
         model_name=_MODEL,
         generation_config={
             "response_mime_type": "application/json",
-            # Optionally bound response size:
-            # "max_output_tokens": 512,
         },
     )
 
-    allowed_categories = ["work", "personal", "health", "career", "errand"]
+    existing_str = ", ".join(sorted(existing_categories or [])) or "(none)"
 
     user = f"""
 You are an API. Return JSON only—no prose, no markdown.
 
 Given a single to-do text, infer:
-- category: one of ["work", "personal", "health", "career", "errand"]
+- category_proposed: a short category string (<= 3 words). You MUST first try to reuse an existing category if it's semantically close.
+- used_existing: boolean — true if you reused an existing category name from the list, false if you introduced a new one.
 - priority: integer 1..5 (1=lowest, 5=highest) based on urgency/importance implied by the text
 - due_dt_iso: an ISO 8601 datetime string with timezone offset if a due time/date is clearly implied, else null
 - rationale: very short reason (one sentence)
@@ -88,20 +157,22 @@ Given a single to-do text, infer:
 Context:
 - current_time_iso: "{now_iso}"
 - timezone: "{TZ}"
+- existing_categories: [{existing_str}]
 
-Rules for due_dt_iso:
-- If only a time is given (e.g., "by 17:30"), assume it refers to today in the given timezone.
-- If that time has already passed today, use the next calendar day at that time.
+Rules:
+- Prefer reusing an existing category if it's a reasonable semantic match (e.g., "exercise" ≈ "health").
+- If only a time is given (e.g., "by 17:30"), assume it refers to today in the given timezone; if that time already passed today, roll to next day.
 - If only a day is given (e.g., "tomorrow", "next Monday"), pick 09:00 local time unless a time is stated.
 - Always return ISO 8601 with timezone offset (e.g., 2025-09-03T17:30:00-04:00).
-- Never return a datetime in the past relative to current_time_iso; roll forward to the next valid occurrence instead.
+- Never return a datetime in the past relative to current_time_iso.
 
 Input text:
 "{text.strip()}"
 
 Return JSON with exactly this shape:
 {{
-  "category": "work|personal|health|career|errand",
+  "category_proposed": "string",
+  "used_existing": true,
   "priority": 1,
   "due_dt_iso": "2025-09-02T18:00:00-04:00" | null,
   "rationale": "string"
@@ -110,7 +181,6 @@ Return JSON with exactly this shape:
 
     resp = model.generate_content(user)
 
-    # If safety blocks, surface it clearly
     pf = getattr(resp, "prompt_feedback", None)
     if pf and getattr(pf, "block_reason", None):
         raise RuntimeError(f"blocked_by_safety: {pf.block_reason}")
@@ -124,20 +194,35 @@ Return JSON with exactly this shape:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"invalid_json_from_gemini: {e}")
 
-    # Basic schema validation
-    for k in ("category", "priority", "due_dt_iso"):
+    for k in ("category_proposed", "used_existing", "priority", "due_dt_iso"):
         if k not in data:
             raise RuntimeError(f"missing_key_in_gemini_json: {k}")
 
-    category = safe_category(str(data["category"]).lower())
+    proposed_raw = str(data["category_proposed"]).strip()
     priority = int(data["priority"])
     if priority < 1 or priority > 5:
         raise RuntimeError("priority_out_of_range")
 
     due_dt = _parse_due_iso(data.get("due_dt_iso"))
 
+    # Post-process: if the model proposed something new, try to map it to an existing category
+    existing_categories = existing_categories or []
+    final_category = proposed_raw
+    used_existing = bool(data.get("used_existing"))
+
+    if not used_existing:
+        mapped = _closest_existing(proposed_raw, existing_categories)
+        if mapped:
+            final_category = mapped
+            used_existing = True
+
+    # Always normalize presentation minimally (strip whitespace)
+    final_category = final_category.strip()
+
     return {
-        "category": category,
+        "category": final_category,      # <-- final canonical category to persist
         "priority": priority,
         "due_dt": due_dt,
+        "raw_category": proposed_raw,    # debugging/telemetry if you want it
+        "used_existing": used_existing,
     }

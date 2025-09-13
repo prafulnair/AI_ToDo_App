@@ -50,10 +50,10 @@ const CategoryCard: React.FC<CategoryCardProps> = ({ name, tasks, onTaskClick })
                   <div className="flex items-center justify-between">
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-gray-900 dark:text-white">
-                        {task.title}
+                        {task.text}
                       </p>
                       <p className="truncate text-xs text-gray-500 dark:text-gray-400">
-                        {task.isDone ? "Completed" : "Pending"}
+                        {task.status === "done" ? "Completed" : "Pending"}
                       </p>
                     </div>
                     <div className="inline-flex items-center text-sm font-semibold text-gray-900 dark:text-white">
