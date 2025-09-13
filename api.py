@@ -6,6 +6,12 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from services import TaskService
 
+from services import TaskService
+from ai_client import parse_command_nlp  
+from db import SessionLocal, TaskDB
+
+
+
 app = FastAPI(title="Smart Todo (Gemini)")
 
 
@@ -19,6 +25,9 @@ class UpdateReq(BaseModel):
 
 def svc_for(session_id: str) -> TaskService:
     return TaskService(session_id=session_id or "public")
+
+class NLPCommandReq(BaseModel):
+    text: str
 
 
 app.add_middleware(
@@ -86,3 +95,30 @@ def delete_task(
     if not task:
         raise HTTPException(404, "Task not found")
     return task.model_dump()
+
+
+@app.post("/nlp/command")
+def nlp_command(
+    req: NLPCommandReq,
+    x_session_id: str = Header(default="public", alias="X-Session-Id"),
+):
+    """
+    Accepts a natural language command (e.g. 'show all work tasks today')
+    Returns structured intent JSON via AI.
+    """
+    try:
+        db = SessionLocal()
+        # collect current categories for this session
+        existing = [
+            row[0]
+            for row in db.query(TaskDB.category)
+            .filter(TaskDB.session_id == x_session_id)
+            .distinct()
+            .all()
+        ]
+        db.close()
+
+        intent = parse_command_nlp(req.text, existing_categories=existing)
+        return intent
+    except Exception as e:
+        raise HTTPException(500, str(e))

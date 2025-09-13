@@ -17,6 +17,14 @@ async function addTask(text: string): Promise<Task> {
   });
 }
 
+// --- API helpers ---
+async function parseCommand(text: string): Promise<any> {
+  return apiFetch<any>("/nlp/command", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
 async function getTasks(): Promise<Task[]> {
   return apiFetch<Task[]>("/tasks");
 }
@@ -36,6 +44,7 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [isFiltered, setIsFiltered] = useState(false);
 
   // Load tasks on mount
   useEffect(() => {
@@ -75,14 +84,48 @@ function App() {
   };
 
   // --- Handlers ---
-  const handleTaskSubmit = async (text: string) => {
-    try {
-      await addTask(text);
-      await loadTasks(); // reload so AI categorization is reflected
-    } catch (err) {
-      console.error("Failed to add task:", err);
+const handleTaskSubmit = async (text: string) => {
+  try {
+    const cmd = await parseCommand(text);
+
+    if (cmd.action === "show") {
+      const data = await getTasks();
+      const filtered = data.filter((t) => {
+        if (cmd.category && t.category !== cmd.category) return false;
+        if (cmd.timeframe === "today" && t.due_dt) {
+          const due = new Date(t.due_dt);
+          const now = new Date();
+          return due.toDateString() === now.toDateString();
+        }
+        return true;
+      });
+      splitAndSet(filtered);
+      setIsFiltered(true); // 🔹 mark filtered mode
+      return;
     }
-  };
+
+    if (cmd.action === "complete_all") {
+      const data = await getTasks();
+      await Promise.all(data.map((t) => markDone(t.id)));
+      await loadTasks();
+      return;
+    }
+
+    if (cmd.action === "delete_category" && cmd.category) {
+      const data = await getTasks();
+      const toDelete = data.filter((t) => t.category === cmd.category);
+      await Promise.all(toDelete.map((t) => deleteTask(t.id)));
+      await loadTasks();
+      return;
+    }
+
+    // Fallback: normal task add
+    await addTask(text);
+    await loadTasks();
+  } catch (err) {
+    console.error("Failed to process input:", err);
+  }
+};
 
   const handleTaskClick = (task: Task) => {
     setSelectedTask(task);
@@ -108,6 +151,8 @@ function App() {
     }
   };
 
+  
+
   // --- Render ---
   return (
     <div className="grid grid-cols-3 h-screen bg-gray-100 dark:bg-gray-900">
@@ -131,6 +176,24 @@ function App() {
             onDelete={handleTaskDelete}
           />
         ))}
+
+        {/* Filter banner */}
+        {isFiltered && (
+          <div className="text-center mb-4">
+            <p className="text-sm text-gray-700 dark:text-gray-300">
+              🔍 Showing filtered results
+            </p>
+            <button
+              className="text-sm text-blue-600 hover:underline"
+              onClick={() => {
+                loadTasks();
+                setIsFiltered(false);
+              }}
+            >
+              🔙 Back to All Tasks
+            </button>
+          </div>
+        )}
 
         {/* Dynamic Category cards */}
         {categories.map((cat) => (

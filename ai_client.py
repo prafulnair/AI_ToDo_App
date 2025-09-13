@@ -226,3 +226,73 @@ Return JSON with exactly this shape:
         "raw_category": proposed_raw,    # debugging/telemetry if you want it
         "used_existing": used_existing,
     }
+
+
+# ai_client.py (add near bottom)
+
+def parse_command_nlp(text: str, existing_categories: list[str]) -> dict:
+    """
+    Use Gemini to parse a natural language command.
+    Returns structured JSON:
+      {
+        "action": "show|complete_all|delete_category",
+        "category": "work|health|..." | null,
+        "timeframe": "today|tomorrow|this_week|all" | null,
+        "rationale": "string"
+      }
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    genai.configure(api_key=api_key)
+
+    model = genai.GenerativeModel(
+        model_name=_MODEL,
+        generation_config={"response_mime_type": "application/json"},
+    )
+
+    prompt = f"""
+You are an API. Return JSON only.
+
+Task:
+Parse this user command: "{text}"
+
+Context:
+- Existing categories: {existing_categories}
+- Valid actions: ["show", "complete_all", "delete_category"]
+- Valid timeframes: ["today", "tomorrow", "this_week", "all"]
+
+Rules:
+- If user says things like "finish all", "mark everything done" → action=complete_all.
+- If user says "delete {{"some category"}}" → action=delete_category with category.
+- If user says "show all ..." → action=show with filters.
+- If category mentioned doesn’t match existing ones, still return it but mark rationale.
+- If timeframe not specified, set to "all".
+- Always include a rationale.
+
+Return JSON:
+{{
+  "action": "show",
+  "category": "work",
+  "timeframe": "today",
+  "rationale": "User asked to show today's work tasks"
+}}
+"""
+
+    resp = model.generate_content(prompt)
+
+    text_out = _get_resp_text(resp)
+    if not text_out:
+        raise RuntimeError("empty_response_from_gemini")
+
+    try:
+        data = json.loads(text_out)
+    except Exception as e:
+        raise RuntimeError(f"invalid_json_from_gemini: {e}")
+
+    # enforce keys
+    for k in ("action", "category", "timeframe", "rationale"):
+        if k not in data:
+            raise RuntimeError(f"missing_key_in_ai_response: {k}")
+
+    return data
