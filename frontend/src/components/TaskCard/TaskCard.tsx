@@ -1,19 +1,35 @@
-import { Card, Button } from "flowbite-react";
+import { Card, Button, Badge } from "flowbite-react";
 import type { Task } from "../../types/task";
 
-// TaskCard.tsx
 interface TaskCardProps {
   task: Task;
   onDone: (id: number) => void;
   onDelete: (id: number) => void;
   onClose?: () => void;
 }
+
+const priorityColor = (p: number) => {
+  if (p >= 5) return "failure"; // 🔥 very urgent = red
+  if (p === 4) return "warning"; // ⚠️ high = amber
+  if (p === 3) return "info";    // ℹ️ medium = blue
+  if (p === 2) return "success"; // ✅ low = green
+  return "gray";                 // trivial
+};
+
+const priorityLabel = (p: number) => {
+  if (p >= 5) return "🔥 Critical";
+  if (p === 4) return "⚠️ High";
+  if (p === 3) return "🔷 Medium";
+  if (p === 2) return "✅ Low";
+  return "• Trivial";
+};
+
 const TaskCard: React.FC<TaskCardProps> = ({ task, onDone, onDelete, onClose }) => {
   const isDone = task.status === "done";
 
   return (
     <Card className="max-w-md w-full shadow-md relative">
-      {/* Close button (only if provided) */}
+      {/* Close button (modal only) */}
       {onClose && (
         <button
           onClick={onClose}
@@ -33,10 +49,20 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onDone, onDelete, onClose }) 
       <h5 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white text-center">
         {task.text}
       </h5>
-      <p className="text-sm text-gray-500 dark:text-gray-400 text-center">
-        {isDone ? "Completed" : "Pending"}
-      </p>
 
+      {/* Status + Priority */}
+      <div className="flex justify-center items-center gap-2 mt-2">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          {isDone ? "Completed" : "Pending"}
+        </p>
+        {task.priority !== undefined && (
+          <Badge color={priorityColor(task.priority)}>
+            {priorityLabel(task.priority)}
+          </Badge>
+        )}
+      </div>
+
+      {/* Actions */}
       <div className="flex justify-center gap-4 mt-3">
         <Button onClick={() => onDone(task.id)} disabled={isDone}>
           Done
