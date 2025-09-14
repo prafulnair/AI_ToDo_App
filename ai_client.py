@@ -457,3 +457,44 @@ Return JSON:
             raise RuntimeError(f"missing_key_in_ai_response: {k}")
 
     return data
+
+
+def filter_tasks_with_ai(tasks: list[dict], category_query: str) -> list[dict]:
+    """
+    Use Gemini to filter tasks relevant to a free-text category query.
+    E.g., "wife related work", "all meetings", "social errands".
+    Returns a smaller task list (subset of input).
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    genai.configure(api_key=api_key)
+
+    model = genai.GenerativeModel(
+        model_name=_MODEL,
+        generation_config={"response_mime_type": "application/json"},
+    )
+
+    task_slice = tasks[:100]
+    prompt = f"""
+You are an API. Return JSON only.
+
+From this list of tasks, select only those relevant to the user query.
+
+Query: "{category_query}"
+
+Tasks:
+{json.dumps(task_slice, ensure_ascii=False)}
+
+Return JSON list of task IDs to keep, like:
+{{ "keep_ids": [1, 3, 7] }}
+"""
+    resp = model.generate_content(prompt)
+    text_out = _get_resp_text(resp)
+
+    try:
+        data = json.loads(text_out)
+        keep_ids = set(data.get("keep_ids", []))
+        return [t for t in tasks if t["id"] in keep_ids]
+    except Exception:
+        return tasks  # fallback: return unfiltered

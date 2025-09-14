@@ -195,71 +195,75 @@ function App() {
       </div>
 
       {/* Right: Task board */}
-      <div className="col-span-2 p-6 overflow-y-auto space-y-4 relative">
-        {categories.length === 0 && tasks.length === 0 && (
-          <p className="text-gray-500 text-center">No tasks yet. Add one!</p>
-        )}
+<div
+  className="col-span-2 p-6 overflow-y-auto space-y-4 relative
+             border-2 border-black rounded-md
+             bg-[#A5B4FB]
+             hover:shadow-[8px_8px_0px_rgba(0,0,0,1)] transition-shadow"
+>
+  {categories.length === 0 && tasks.length === 0 && (
+    <p className="text-gray-800 font-medium text-center">
+      No tasks yet. Add one!
+    </p>
+  )}
 
-        {/* Isolated tasks */}
-        {tasks.map((task) => (
-          <TaskCard
-            key={task.id}
-            task={task}
-            onDone={handleTaskDone}
-            onDelete={handleTaskDelete}
-          />
-        ))}
+  {/* Isolated tasks */}
+  {tasks.map((task) => (
+    <TaskCard
+      key={task.id}
+      task={task}
+      onDone={handleTaskDone}
+      onDelete={handleTaskDelete}
+    />
+  ))}
 
-        {isFiltered && (
-          <div className="text-center mb-4">
-            <p className="text-sm text-gray-700 dark:text-gray-300">
-              🔍 Showing filtered results
-            </p>
-            <button
-              className="text-sm text-blue-600 hover:underline"
-              onClick={() => {
-                loadTasks();
-                setIsFiltered(false);
-              }}
-            >
-              🔙 Back to All Tasks
-            </button>
-          </div>
-        )}
+  {isFiltered && (
+    <div className="text-center mb-4">
+      <p className="text-sm text-gray-800">🔍 Showing filtered results</p>
+      <button
+        className="text-sm text-blue-700 hover:underline"
+        onClick={() => {
+          loadTasks();
+          setIsFiltered(false);
+        }}
+      >
+        🔙 Back to All Tasks
+      </button>
+    </div>
+  )}
 
-        {categories.map((cat) => (
-          <CategoryCard
-            key={cat.name}
-            name={cat.name}
-            tasks={cat.tasks}
-            onTaskClick={handleTaskClick}
-          />
-        ))}
+  {categories.map((cat) => (
+    <CategoryCard
+      key={cat.name}
+      name={cat.name}
+      tasks={cat.tasks}
+      onTaskClick={handleTaskClick}
+    />
+  ))}
 
-        {/* Modal for single task */}
-        {selectedTask && (
-          <Modal onClose={() => setSelectedTask(null)}>
-            <TaskCard
-              task={selectedTask}
-              onDone={handleTaskDone}
-              onDelete={handleTaskDelete}
-              onClose={() => setSelectedTask(null)}
-            />
-          </Modal>
-        )}
+  {/* Modals stay the same */}
+  {selectedTask && (
+    <Modal onClose={() => setSelectedTask(null)}>
+      <TaskCard
+        task={selectedTask}
+        onDone={handleTaskDone}
+        onDelete={handleTaskDelete}
+        onClose={() => setSelectedTask(null)}
+      />
+    </Modal>
+  )}
 
-        {/* 🔹 Modal for summary */}
-        {summaryData && (
-          <Modal onClose={() => setSummaryData(null)}>
-            <SummaryPanel
-              summary={summaryData}
-              tasks={[...tasks, ...categories.flatMap((c) => c.tasks)]}
-              onClose={() => setSummaryData(null)}
-              onTaskClick={handleTaskClick}
-            />
-          </Modal>
-        )}
-      </div>
+  {summaryData && (
+    <Modal onClose={() => setSummaryData(null)}>
+      <SummaryPanel
+        summary={summaryData}
+        tasks={[...tasks, ...categories.flatMap((c) => c.tasks)]}
+        onClose={() => setSummaryData(null)}
+        onTaskClick={handleTaskClick}
+      />
+    </Modal>
+  )}
+</div>
     </div>
   );
 }

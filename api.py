@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from services import TaskService
 
 from services import TaskService
-from ai_client import parse_command_nlp, summarize_tasks  
+from ai_client import parse_command_nlp, summarize_tasks, filter_tasks_with_ai 
 from db import SessionLocal, TaskDB
 
 
@@ -189,6 +189,25 @@ def generate_summary(
             for t in q.all()
         ]
         db.close()
+
+        # NEW STEP: refine by category_query if it's not an exact match
+        category_query = intent.get("category")
+        if category_query:
+            existing_categories = {t["category"] for t in tasks}
+            if category_query not in existing_categories:
+                # call AI filter
+                tasks = filter_tasks_with_ai(tasks, category_query)
+
+        if not tasks:
+            return {
+                "headline": "No tasks matched your request",
+                "kpis": { "open": 0, "completed": 0, "overdue": 0, "due_today": 0 },
+                "highlights": [],
+                "by_category": [],
+                "urgent_ids": [],
+                "overdue_ids": [],
+                "markdown": f"No tasks found for '{category_query}' in {intent.get('timeframe')}"
+            }
 
         # 3. Call summarizer
         summary = summarize_tasks(tasks, intent)

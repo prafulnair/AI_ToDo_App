@@ -50,68 +50,67 @@ const CategoryCard: React.FC<CategoryCardProps> = ({ name, tasks, onTaskClick })
   };
 
   return (
-    <Card className="max-w-md mx-auto shadow-md">
+    <div className="w-full max-w-md border-black border-2 rounded-md bg-white hover:shadow-[6px_6px_0px_rgba(0,0,0,1)] transition-shadow p-2">
       {/* Collapsed view */}
       {!expanded && (
-        <div className="text-center">
-          <h5 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">
-            {name}
-          </h5>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+        <div className="p-6 text-center">
+          <h5 className="text-xl font-extrabold mb-2">{name}</h5>
+          <p className="text-sm text-gray-600 mb-4">
             {tasks.length} task{tasks.length !== 1 && "s"}
           </p>
-          <div className="flex justify-center">
-            <Button onClick={() => setExpanded(true)}>Expand</Button>
-          </div>
+          <button
+            onClick={() => setExpanded(true)}
+            className="h-10 px-4 border-black border-2 bg-[#A6FAFF] hover:bg-[#79F7FF] hover:shadow-[2px_2px_0px_rgba(0,0,0,1)]"
+          >
+            Expand
+          </button>
         </div>
       )}
 
       {/* Expanded view */}
       {expanded && (
-        <div>
-          <div className="mb-4 flex items-center justify-between">
-            <h5 className="text-xl font-bold leading-none text-gray-900 dark:text-white">
-              {name}
-            </h5>
-            <Button size="xs" color="light" onClick={() => setExpanded(false)}>
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h5 className="text-xl font-extrabold">{name}</h5>
+            <button
+              onClick={() => setExpanded(false)}
+              className="h-8 px-3 border-black border-2 bg-gray-200 hover:bg-gray-300 hover:shadow-[2px_2px_0px_rgba(0,0,0,1)] text-sm"
+            >
               Collapse
-            </Button>
+            </button>
           </div>
-          <div className="flow-root">
-            <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-              {sortedTasks.map((task) => (
-                <li
-                  key={task.id}
-                  className="py-3 sm:py-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded"
-                  onClick={() => onTaskClick(task)}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-gray-900 dark:text-white">
-                        {task.text}
+
+          <ul className="divide-y divide-gray-300">
+            {sortedTasks.map((task) => (
+              <li
+                key={task.id}
+                className="py-3 cursor-pointer hover:bg-gray-50"
+                onClick={() => onTaskClick(task)}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0 flex-1 pr-3">
+                    <p className="truncate text-sm font-bold">{task.text}</p>
+                    <p className="truncate text-xs text-gray-500">
+                      {task.status === "done" ? "✅ Completed" : "⏳ Pending"}
+                    </p>
+                    {task.due_dt && (
+                      <p className={`truncate text-xs ${getDueClass(task)}`}>
+                        Due: {new Date(task.due_dt).toLocaleString()}
                       </p>
-                      <p className="truncate text-xs text-gray-500 dark:text-gray-400">
-                        {task.status === "done" ? "Completed" : "Pending"}
-                      </p>
-                      {task.due_dt && (
-                        <p className={`truncate text-xs ${getDueClass(task)}`}>
-                          Due: {new Date(task.due_dt).toLocaleString()}
-                        </p>
-                      )}
-                    </div>
-                    {task.priority !== undefined && (
-                      <Badge color={priorityColor(task.priority)}>
-                        {priorityLabel(task.priority)}
-                      </Badge>
                     )}
                   </div>
-                </li>
-              ))}
-            </ul>
-          </div>
+                  {task.priority !== undefined && (
+                    <span className="ml-2 px-2 py-1 border-2 border-black bg-yellow-100 text-xs font-bold">
+                      {priorityLabel(task.priority)}
+                    </span>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
-    </Card>
+    </div>
   );
 };
 
