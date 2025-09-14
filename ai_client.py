@@ -296,3 +296,119 @@ Return JSON:
             raise RuntimeError(f"missing_key_in_ai_response: {k}")
 
     return data
+
+
+# -------------------------
+# Summarization
+# -------------------------
+
+def summarize_tasks(tasks: list[dict], intent: dict) -> dict:
+    """
+    Summarize tasks into structured KPIs + highlights.
+    Input: list of task dicts (id, text, category, status, priority, due_dt)
+    Output: summary JSON + markdown narrative.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    genai.configure(api_key=api_key)
+
+    model = genai.GenerativeModel(
+        model_name=_MODEL,
+        generation_config={"response_mime_type": "application/json"},
+    )
+
+    # trim tasks to top 100 to avoid token bloat
+    task_slice = tasks[:100]
+
+    prompt = f"""
+You are an API. Return JSON only — no prose.
+
+Task:
+Summarize the following todo tasks for the user.
+
+Context:
+- Intent: {json.dumps(intent, ensure_ascii=False)}
+- Current time: {now_iso}
+- Tasks (JSON list): {json.dumps(task_slice, default=str, ensure_ascii=False)}
+
+Return JSON with exactly this shape:
+{{
+  "headline": "string",
+  "kpis": {{ "open": 0, "completed": 0, "overdue": 0, "due_today": 0 }},
+  "highlights": ["string", "string"],
+  "by_category": [
+    {{ "name": "Work", "open": 3, "done": 2 }}
+  ],
+  "urgent_ids": [1,2],
+  "overdue_ids": [3],
+  "markdown": "### Summary\\n- bullet points in markdown"
+}}
+"""
+
+    resp = model.generate_content(prompt)
+    text_out = _get_resp_text(resp)
+    if not text_out:
+        raise RuntimeError("empty_response_from_gemini")
+
+    try:
+        data = json.loads(text_out)
+    except Exception as e:
+        raise RuntimeError(f"invalid_json_from_gemini: {e}")
+
+    return data
+
+
+# Extend parser to include summarize
+def parse_command_nlp(text: str, existing_categories: list[str]) -> dict:
+    """
+    Extended parser: now also supports 'summarize'.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    genai.configure(api_key=api_key)
+
+    model = genai.GenerativeModel(
+        model_name=_MODEL,
+        generation_config={"response_mime_type": "application/json"},
+    )
+
+    prompt = f"""
+You are an API. Return JSON only.
+
+Parse this user command: "{text}"
+
+Context:
+- Existing categories: {existing_categories}
+- Valid actions: ["show", "complete_all", "delete_category", "summarize"]
+- Valid timeframes: ["today", "tomorrow", "this_week", "all"]
+
+Rules:
+- If user says "summarize" (e.g. "summarize today", "summarize social work this week") → action=summarize with category/timeframe.
+- Otherwise rules are same as before.
+
+Return JSON:
+{{
+  "action": "summarize",
+  "category": "social",
+  "timeframe": "today",
+  "rationale": "User asked to summarize today's social tasks"
+}}
+"""
+
+    resp = model.generate_content(prompt)
+    text_out = _get_resp_text(resp)
+    if not text_out:
+        raise RuntimeError("empty_response_from_gemini")
+
+    try:
+        data = json.loads(text_out)
+    except Exception as e:
+        raise RuntimeError(f"invalid_json_from_gemini: {e}")
+
+    for k in ("action", "category", "timeframe", "rationale"):
+        if k not in data:
+            raise RuntimeError(f"missing_key_in_ai_response: {k}")
+
+    return data

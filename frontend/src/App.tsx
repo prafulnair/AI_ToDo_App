@@ -3,10 +3,10 @@ import InputArea from "./components/InputArea/InputArea";
 import CategoryCard from "./components/CategoryCard/CategoryCard";
 import TaskCard from "./components/TaskCard/TaskCard";
 import Modal from "./components/Modal/Modal";
+import SummaryPanel from "./components/SummaryPanel/SummaryPanel"; // 🔹 new
 
 // Types
 import type { Task, Category } from "./types/task";
-
 import { apiFetch } from "./utils/api";
 
 // --- API helpers ---
@@ -17,7 +17,6 @@ async function addTask(text: string): Promise<Task> {
   });
 }
 
-// --- API helpers ---
 async function parseCommand(text: string): Promise<any> {
   return apiFetch<any>("/nlp/command", {
     method: "POST",
@@ -40,13 +39,23 @@ async function deleteTask(id: number): Promise<Task> {
   return apiFetch<Task>(`/tasks/${id}`, { method: "DELETE" });
 }
 
+// 🔹 new: summarization helper
+async function summarize(params: { timeframe: string; category?: string }) {
+  return apiFetch<any>("/summary", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
 function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isFiltered, setIsFiltered] = useState(false);
 
-  // Load tasks on mount
+  // 🔹 summary state
+  const [summaryData, setSummaryData] = useState<any | null>(null);
+
   useEffect(() => {
     loadTasks();
   }, []);
@@ -60,7 +69,6 @@ function App() {
     }
   };
 
-  // --- Helper to split into isolated + categories ---
   const splitAndSet = (data: Task[]) => {
     const grouped: Record<string, Task[]> = {};
     const isolated: Task[] = [];
@@ -84,52 +92,59 @@ function App() {
   };
 
   // --- Handlers ---
-const handleTaskSubmit = async (text: string) => {
-  try {
-    const cmd = await parseCommand(text);
+  const handleTaskSubmit = async (text: string) => {
+    try {
+      const cmd = await parseCommand(text);
 
-    if (cmd.action === "show") {
-      const data = await getTasks();
-      const filtered = data.filter((t) => {
-        if (cmd.category && t.category !== cmd.category) return false;
-        if (cmd.timeframe === "today" && t.due_dt) {
-          const due = new Date(t.due_dt);
-          const now = new Date();
-          return due.toDateString() === now.toDateString();
-        }
-        return true;
-      });
-      splitAndSet(filtered);
-      setIsFiltered(true); // 🔹 mark filtered mode
-      return;
-    }
+      if (cmd.action === "show") {
+        const data = await getTasks();
+        const filtered = data.filter((t) => {
+          if (cmd.category && t.category !== cmd.category) return false;
+          if (cmd.timeframe === "today" && t.due_dt) {
+            const due = new Date(t.due_dt);
+            const now = new Date();
+            return due.toDateString() === now.toDateString();
+          }
+          return true;
+        });
+        splitAndSet(filtered);
+        setIsFiltered(true);
+        return;
+      }
 
-    if (cmd.action === "complete_all") {
-      const data = await getTasks();
-      await Promise.all(data.map((t) => markDone(t.id)));
+      if (cmd.action === "complete_all") {
+        const data = await getTasks();
+        await Promise.all(data.map((t) => markDone(t.id)));
+        await loadTasks();
+        return;
+      }
+
+      if (cmd.action === "delete_category" && cmd.category) {
+        const data = await getTasks();
+        const toDelete = data.filter((t) => t.category === cmd.category);
+        await Promise.all(toDelete.map((t) => deleteTask(t.id)));
+        await loadTasks();
+        return;
+      }
+
+      if (cmd.action === "summarize") {
+        const data = await summarize({
+          timeframe: cmd.timeframe || "all",
+          category: cmd.category || undefined,
+        });
+        setSummaryData(data);
+        return;
+      }
+
+      // fallback: add task
+      await addTask(text);
       await loadTasks();
-      return;
+    } catch (err) {
+      console.error("Failed to process input:", err);
     }
-
-    if (cmd.action === "delete_category" && cmd.category) {
-      const data = await getTasks();
-      const toDelete = data.filter((t) => t.category === cmd.category);
-      await Promise.all(toDelete.map((t) => deleteTask(t.id)));
-      await loadTasks();
-      return;
-    }
-
-    // Fallback: normal task add
-    await addTask(text);
-    await loadTasks();
-  } catch (err) {
-    console.error("Failed to process input:", err);
-  }
-};
-
-  const handleTaskClick = (task: Task) => {
-    setSelectedTask(task);
   };
+
+  const handleTaskClick = (task: Task) => setSelectedTask(task);
 
   const handleTaskDone = async (id: number) => {
     try {
@@ -151,14 +166,32 @@ const handleTaskSubmit = async (text: string) => {
     }
   };
 
-  
-
   // --- Render ---
   return (
     <div className="grid grid-cols-3 h-screen bg-gray-100 dark:bg-gray-900">
       {/* Left: Input */}
-      <div className="col-span-1 border-r border-gray-200 dark:border-gray-700 flex items-center justify-center bg-white dark:bg-gray-800">
+      <div className="col-span-1 border-r border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center bg-white dark:bg-gray-800">
         <InputArea onTaskSubmit={handleTaskSubmit} />
+        <div className="mt-4 space-x-2">
+          <button
+            className="px-3 py-1 text-sm bg-blue-600 text-white rounded"
+            onClick={async () => {
+              const data = await summarize({ timeframe: "today" });
+              setSummaryData(data);
+            }}
+          >
+            Summarize Today
+          </button>
+          <button
+            className="px-3 py-1 text-sm bg-blue-500 text-white rounded"
+            onClick={async () => {
+              const data = await summarize({ timeframe: "this_week" });
+              setSummaryData(data);
+            }}
+          >
+            Summarize Week
+          </button>
+        </div>
       </div>
 
       {/* Right: Task board */}
@@ -177,7 +210,6 @@ const handleTaskSubmit = async (text: string) => {
           />
         ))}
 
-        {/* Filter banner */}
         {isFiltered && (
           <div className="text-center mb-4">
             <p className="text-sm text-gray-700 dark:text-gray-300">
@@ -195,7 +227,6 @@ const handleTaskSubmit = async (text: string) => {
           </div>
         )}
 
-        {/* Dynamic Category cards */}
         {categories.map((cat) => (
           <CategoryCard
             key={cat.name}
@@ -213,6 +244,18 @@ const handleTaskSubmit = async (text: string) => {
               onDone={handleTaskDone}
               onDelete={handleTaskDelete}
               onClose={() => setSelectedTask(null)}
+            />
+          </Modal>
+        )}
+
+        {/* 🔹 Modal for summary */}
+        {summaryData && (
+          <Modal onClose={() => setSummaryData(null)}>
+            <SummaryPanel
+              summary={summaryData}
+              tasks={[...tasks, ...categories.flatMap((c) => c.tasks)]}
+              onClose={() => setSummaryData(null)}
+              onTaskClick={handleTaskClick}
             />
           </Modal>
         )}

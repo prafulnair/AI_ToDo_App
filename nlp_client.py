@@ -93,3 +93,4 @@ Return JSON exactly like this:
         data["rationale"] = ""
 
     return data
+

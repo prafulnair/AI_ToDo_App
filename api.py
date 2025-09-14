@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from services import TaskService
 
 from services import TaskService
-from ai_client import parse_command_nlp  
+from ai_client import parse_command_nlp, summarize_tasks  
 from db import SessionLocal, TaskDB
 
 
@@ -28,6 +28,14 @@ def svc_for(session_id: str) -> TaskService:
 
 class NLPCommandReq(BaseModel):
     text: str
+
+
+
+class SummaryReq(BaseModel):
+    text: Optional[str] = None           # raw "summarize today"
+    timeframe: Optional[str] = None      # "today" | "this_week" | "all"
+    category: Optional[str] = None       # e.g., "work", "social"
+
 
 
 app.add_middleware(
@@ -120,5 +128,71 @@ def nlp_command(
 
         intent = parse_command_nlp(req.text, existing_categories=existing)
         return intent
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    
+
+@app.post("/summary")
+def generate_summary(
+    req: SummaryReq,
+    x_session_id: str = Header(default="public", alias="X-Session-Id"),
+):
+    """
+    Summarize the tasks for the user. if the 'text' is provided run through NLP Parser
+    Else use timeframe/catgeory directly
+    """
+
+    try:
+        db = SessionLocal()
+
+        # 1. resolve intent
+        if req.text:
+            # collect catgeories for parser context
+            existing = [
+                row[0]
+                for row in db.query(TaskDB.category)
+                .filter(TaskDB.session_id == x_session_id)
+                .distinct()
+                .all()
+            ]
+            intent = parse_command_nlp(req.text, existing_categories=existing)
+
+        else:
+            intent = {
+                "action": "summarize",
+                "category": req.category,
+                "timeframe": req.timeframe or "all",
+                "rationale": "direct summary request"
+            }
+
+        # 2. select tasks by session
+        q = db.query(TaskDB).filter(TaskDB.session_id == x_session_id)
+
+        if intent.get("timeframe") == "today":
+            start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1)
+            q = q.filter(TaskDB.due_dt >= start, TaskDB.due_dt < end)
+        elif intent.get("timeframe") == "this_week":
+            start = datetime.now() - timedelta(days=datetime.now().weekday())
+            end = start + timedelta(days=7)
+            q = q.filter(TaskDB.due_dt >= start, TaskDB.due_dt < end)
+
+        tasks = [
+            {
+                "id": t.id,
+                "text": t.text,
+                "category": t.category,
+                "status": t.status,
+                "priority": t.priority,
+                "due_dt": t.due_dt.isoformat() if t.due_dt else None,
+            }
+            for t in q.all()
+        ]
+        db.close()
+
+        # 3. Call summarizer
+        summary = summarize_tasks(tasks, intent)
+        return summary
+
     except Exception as e:
         raise HTTPException(500, str(e))
