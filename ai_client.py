@@ -497,4 +497,4 @@ Return JSON list of task IDs to keep, like:
         keep_ids = set(data.get("keep_ids", []))
         return [t for t in tasks if t["id"] in keep_ids]
     except Exception:
-        return tasks  # fallback: return unfiltered
+        return tasks  # fallback: return unfilteredss
