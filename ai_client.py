@@ -3,6 +3,7 @@ import os, json, re
 from datetime import datetime
 from typing import Optional, Dict, Any, Sequence, Tuple
 import difflib
+from collections import Counter
 
 import google.generativeai as genai
 import dateparser
@@ -302,11 +303,51 @@ Return JSON:
 # Summarization
 # -------------------------
 
+def _fallback_narrative(task_slice: list[dict], intent: dict) -> str:
+    now = datetime.now()
+    open_tasks = [t for t in task_slice if str(t.get("status","open")) != "done"]
+    completed = len([t for t in task_slice if str(t.get("status","open")) == "done"])
+
+    def _dt(t):
+        v = t.get("due_dt")
+        try:
+            return datetime.fromisoformat(v) if isinstance(v, str) else v
+        except Exception:
+            return None
+
+    due_today = [t for t in open_tasks if _dt(t) and _dt(t).date() == now.date()]
+    overdue   = [t for t in open_tasks if _dt(t) and _dt(t) < now]
+
+    top_cat = ""
+    if open_tasks:
+        c = Counter([str(t.get("category","")).strip() or "Uncategorized" for t in open_tasks])
+        top_cat = c.most_common(1)[0][0]
+
+    focus = ""
+    # Pick one item to nudge: overdue > due_today > high priority
+    pick = None
+    if overdue: pick = overdue[0]
+    elif due_today: pick = due_today[0]
+    else:
+        hp = [t for t in open_tasks if int(t.get("priority", 0)) >= 4]
+        if hp: pick = hp[0]
+    if pick: focus = f' Focus first on “{pick.get("text","")}”.'
+
+    tf = intent.get("timeframe") or "your list"
+    bits = []
+    if open_tasks: bits.append(f"{len(open_tasks)} open")
+    if completed:  bits.append(f"{completed} completed")
+    if overdue:    bits.append(f"{len(overdue)} overdue")
+    if due_today:  bits.append(f"{len(due_today)} due today")
+    counters = ", ".join(bits) if bits else "nothing new"
+
+    cat_line = f" {top_cat} has the most items." if top_cat else ""
+    return f"For {tf}, you have {counters}.{cat_line}{focus}".strip()
+
+
 def summarize_tasks(tasks: list[dict], intent: dict) -> dict:
     """
-    Summarize tasks into structured KPIs + highlights.
-    Input: list of task dicts (id, text, category, status, priority, due_dt)
-    Output: summary JSON + markdown narrative.
+    Summarize tasks into structured KPIs + highlights + a friendly narrative.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -318,31 +359,30 @@ def summarize_tasks(tasks: list[dict], intent: dict) -> dict:
         generation_config={"response_mime_type": "application/json"},
     )
 
-    # trim tasks to top 100 to avoid token bloat
     task_slice = tasks[:100]
 
     prompt = f"""
-You are an API. Return JSON only — no prose.
+You are an API. Return JSON only — no markdown in fields unless asked.
 
-Task:
-Summarize the following todo tasks for the user.
+Create a *real* summary of these tasks. Replace all example values with actual content.
+The "narrative" must be 1–3 sentences, plain text, friendly, concise, and specific to the data.
+Do NOT return placeholders like "### Structured summary..." anywhere.
 
 Context:
 - Intent: {json.dumps(intent, ensure_ascii=False)}
 - Current time: {now_iso}
 - Tasks (JSON list): {json.dumps(task_slice, default=str, ensure_ascii=False)}
 
-Return JSON with exactly this shape:
+Return JSON with exactly this shape (fill with real values):
 {{
   "headline": "string",
   "kpis": {{ "open": 0, "completed": 0, "overdue": 0, "due_today": 0 }},
-  "highlights": ["string", "string"],
-  "by_category": [
-    {{ "name": "Work", "open": 3, "done": 2 }}
-  ],
-  "urgent_ids": [1,2],
-  "overdue_ids": [3],
-  "markdown": "### Summary\\n- bullet points in markdown"
+  "highlights": ["string"],
+  "by_category": [{{ "name": "Work", "open": 3, "done": 2 }}],
+  "urgent_ids": [1],
+  "overdue_ids": [2],
+  "markdown": "- bullet one\\n- bullet two",
+  "narrative": "Plain conversational recap (no markdown)"
 }}
 """
 
@@ -356,8 +396,13 @@ Return JSON with exactly this shape:
     except Exception as e:
         raise RuntimeError(f"invalid_json_from_gemini: {e}")
 
-    return data
+    # Safety net: if model returns junk/placeholder narrative, craft one
+    nar = (data.get("narrative") or "").strip()
+    md  = (data.get("markdown")  or "").strip()
+    if not nar or "Structured summary" in nar or "Structured summary" in md or len(nar) < 20:
+        data["narrative"] = _fallback_narrative(task_slice, intent)
 
+    return data
 
 # Extend parser to include summarize
 def parse_command_nlp(text: str, existing_categories: list[str]) -> dict:
