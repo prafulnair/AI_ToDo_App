@@ -3,6 +3,8 @@
 An AI-powered todo manager with **FastAPI backend**, **CLI interface**, and **SQLite persistence**. Tasks are automatically categorized, prioritized, and scheduled using Google Gemini.
 
 ---
+<img width="2126" height="1690" alt="image" src="https://github.com/user-attachments/assets/393a01bd-a3a8-4400-bcf2-82a6ffd6dd7d" />
+
 
 ## Features
 - **Natural task input**: Add todos like `"Finish API doc by 5pm"`.
@@ -10,7 +12,7 @@ An AI-powered todo manager with **FastAPI backend**, **CLI interface**, and **SQ
 - **FastAPI REST API** with Swagger docs at `/docs`.
 - **Interactive CLI** (terminal REPL) for quick use.
 - **SQLite persistence** via SQLAlchemy — tasks survive restarts.
-- **Commands supported**:
+- **Features supported**:
   - `add <text>`
   - `show all`
   - `show <category>`
@@ -77,13 +79,7 @@ Example:
 todo> add Meeting with Ralph tomorrow at 2pm
 Added Meeting with Ralph tomorrow at 2pm → work (p4)
 
-todo> show immediate
-┏━━━┳━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃id ┃ category ┃ priority┃ due                  ┃ status ┃ text                     ┃
-┡━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-┃1  ┃ work     ┃ 4       ┃ 2025-09-04T14:00-04:00┃ open   ┃ Meeting with someone...    ┃
-└───┴──────────┴─────────┴──────────────────────┴────────┴──────────────────────────┘
-```
+
 
 ### API
 Start server:
