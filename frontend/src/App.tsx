@@ -3,7 +3,9 @@ import InputArea from "./components/InputArea/InputArea";
 import CategoryCard from "./components/CategoryCard/CategoryCard";
 import TaskCard from "./components/TaskCard/TaskCard";
 import Modal from "./components/Modal/Modal";
-import SummaryPanel from "./components/SummaryPanel/SummaryPanel"; // 🔹 new
+import SummaryPanel from "./components/SummaryPanel/SummaryPanel";
+import { useNotify } from "./components/ToastProvider";
+import QuickStats from "./components/QuickStats/QuickStats";
 
 // Types
 import type { Task, Category } from "./types/task";
@@ -39,7 +41,6 @@ async function deleteTask(id: number): Promise<Task> {
   return apiFetch<Task>(`/tasks/${id}`, { method: "DELETE" });
 }
 
-// 🔹 new: summarization helper
 async function summarize(params: { timeframe: string; category?: string }) {
   return apiFetch<any>("/summary", {
     method: "POST",
@@ -52,9 +53,8 @@ function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isFiltered, setIsFiltered] = useState(false);
-
-  // 🔹 summary state
   const [summaryData, setSummaryData] = useState<any | null>(null);
+  const notify = useNotify();
 
   useEffect(() => {
     loadTasks();
@@ -91,7 +91,6 @@ function App() {
     );
   };
 
-  // --- Handlers ---
   const handleTaskSubmit = async (text: string) => {
     try {
       const cmd = await parseCommand(text);
@@ -133,12 +132,13 @@ function App() {
           category: cmd.category || undefined,
         });
         setSummaryData(data);
+        notify.warning("Summary generated");
         return;
       }
 
-      // fallback: add task
       await addTask(text);
       await loadTasks();
+      notify.success("Task added!");
     } catch (err) {
       console.error("Failed to process input:", err);
     }
@@ -150,6 +150,7 @@ function App() {
     try {
       await markDone(id);
       await loadTasks();
+      notify.info("Task marked done!");
       setSelectedTask(null);
     } catch (err) {
       console.error("Failed to mark task done:", err);
@@ -160,6 +161,7 @@ function App() {
     try {
       await deleteTask(id);
       await loadTasks();
+      notify.danger("Task deleted!");
       setSelectedTask(null);
     } catch (err) {
       console.error("Failed to delete task:", err);
@@ -167,103 +169,110 @@ function App() {
   };
 
   // --- Render ---
+  // 🔹 flatten tasks for stats
+  const allTasks = [...tasks, ...categories.flatMap((c) => c.tasks)];
+
   return (
-    <div className="grid grid-cols-3 h-screen bg-gray-100 dark:bg-gray-900">
-      {/* Left: Input */}
-      <div className="col-span-1 border-r border-gray-200 dark:border-gray-700 flex flex-col items-center justify-center bg-white dark:bg-gray-800">
-        <InputArea onTaskSubmit={handleTaskSubmit} />
-        <div className="mt-4 space-x-2">
-          <button
-            className="px-3 py-1 text-sm bg-blue-600 text-white rounded"
-            onClick={async () => {
-              const data = await summarize({ timeframe: "today" });
-              setSummaryData(data);
-            }}
-          >
-            Summarize Today
-          </button>
-          <button
-            className="px-3 py-1 text-sm bg-blue-500 text-white rounded"
-            onClick={async () => {
-              const data = await summarize({ timeframe: "this_week" });
-              setSummaryData(data);
-            }}
-          >
-            Summarize Week
-          </button>
+    <div className="grid grid-cols-3 h-screen bg-gray-100">
+      {/* Left: Card B */}
+      <div className="col-span-1 p-6">
+        <div
+          className="w-full h-full border-2 border-black rounded-md bg-white 
+                     hover:shadow-[8px_8px_0px_rgba(0,0,0,1)] transition-shadow 
+                     flex flex-col space-y-6 p-4"
+        >
+          {/* Card C: Quick Stats */}
+          <QuickStats
+            total={allTasks.length}
+            completed={allTasks.filter((t) => t.status === "done").length}
+            pending={allTasks.filter((t) => t.status !== "done").length}
+          />
+
+          {/* Card A: Input */}
+          <div className="border-2 border-black rounded-md bg-white p-4 hover:shadow-[4px_4px_0px_rgba(0,0,0,1)]">
+            <InputArea
+              onTaskSubmit={handleTaskSubmit}
+              onSummarizeToday={async () => {
+                const data = await summarize({ timeframe: "today" });
+                setSummaryData(data);
+              }}
+              onSummarizeWeek={async () => {
+                const data = await summarize({ timeframe: "this_week" });
+                setSummaryData(data);
+              }}
+            />
+          </div>
         </div>
       </div>
 
       {/* Right: Task board */}
-<div
-  className="col-span-2 p-6 overflow-y-auto space-y-4 relative
-             border-2 border-black rounded-md
-             bg-[#A5B4FB]
-             hover:shadow-[8px_8px_0px_rgba(0,0,0,1)] transition-shadow"
->
-  {categories.length === 0 && tasks.length === 0 && (
-    <p className="text-gray-800 font-medium text-center">
-      No tasks yet. Add one!
-    </p>
-  )}
-
-  {/* Isolated tasks */}
-  {tasks.map((task) => (
-    <TaskCard
-      key={task.id}
-      task={task}
-      onDone={handleTaskDone}
-      onDelete={handleTaskDelete}
-    />
-  ))}
-
-  {isFiltered && (
-    <div className="text-center mb-4">
-      <p className="text-sm text-gray-800">🔍 Showing filtered results</p>
-      <button
-        className="text-sm text-blue-700 hover:underline"
-        onClick={() => {
-          loadTasks();
-          setIsFiltered(false);
-        }}
+      <div
+        className="col-span-2 p-6 overflow-y-auto space-y-4 relative
+                   border-2 border-black rounded-md
+                   bg-[#A5B4FB]
+                   hover:shadow-[8px_8px_0px_rgba(0,0,0,1)] transition-shadow"
       >
-        🔙 Back to All Tasks
-      </button>
-    </div>
-  )}
+        {categories.length === 0 && tasks.length === 0 && (
+          <p className="text-gray-800 font-medium text-center">
+            No tasks yet. Add one!
+          </p>
+        )}
 
-  {categories.map((cat) => (
-    <CategoryCard
-      key={cat.name}
-      name={cat.name}
-      tasks={cat.tasks}
-      onTaskClick={handleTaskClick}
-    />
-  ))}
+        {tasks.map((task) => (
+          <TaskCard
+            key={task.id}
+            task={task}
+            onDone={handleTaskDone}
+            onDelete={handleTaskDelete}
+          />
+        ))}
 
-  {/* Modals stay the same */}
-  {selectedTask && (
-    <Modal onClose={() => setSelectedTask(null)}>
-      <TaskCard
-        task={selectedTask}
-        onDone={handleTaskDone}
-        onDelete={handleTaskDelete}
-        onClose={() => setSelectedTask(null)}
-      />
-    </Modal>
-  )}
+        {isFiltered && (
+          <div className="text-center mb-4">
+            <p className="text-sm text-gray-800">🔍 Showing filtered results</p>
+            <button
+              className="text-sm text-blue-700 hover:underline"
+              onClick={() => {
+                loadTasks();
+                setIsFiltered(false);
+              }}
+            >
+              🔙 Back to All Tasks
+            </button>
+          </div>
+        )}
 
-  {summaryData && (
-    <Modal onClose={() => setSummaryData(null)}>
-      <SummaryPanel
-        summary={summaryData}
-        tasks={[...tasks, ...categories.flatMap((c) => c.tasks)]}
-        onClose={() => setSummaryData(null)}
-        onTaskClick={handleTaskClick}
-      />
-    </Modal>
-  )}
-</div>
+        {categories.map((cat) => (
+          <CategoryCard
+            key={cat.name}
+            name={cat.name}
+            tasks={cat.tasks}
+            onTaskClick={handleTaskClick}
+          />
+        ))}
+
+        {selectedTask && (
+          <Modal onClose={() => setSelectedTask(null)}>
+            <TaskCard
+              task={selectedTask}
+              onDone={handleTaskDone}
+              onDelete={handleTaskDelete}
+              onClose={() => setSelectedTask(null)}
+            />
+          </Modal>
+        )}
+
+        {summaryData && (
+          <Modal onClose={() => setSummaryData(null)}>
+            <SummaryPanel
+              summary={summaryData}
+              tasks={allTasks}
+              onClose={() => setSummaryData(null)}
+              onTaskClick={handleTaskClick}
+            />
+          </Modal>
+        )}
+      </div>
     </div>
   );
 }
