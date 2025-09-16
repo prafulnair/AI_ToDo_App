@@ -3,7 +3,8 @@
 An AI-powered todo manager with **FastAPI backend**, **CLI interface**, and **SQLite persistence**. Tasks are automatically categorized, prioritized, and scheduled using Google Gemini.
 
 ---
-<img width="2126" height="1690" alt="image" src="https://github.com/user-attachments/assets/393a01bd-a3a8-4400-bcf2-82a6ffd6dd7d" />
+<img width="2228" height="1840" alt="image" src="https://github.com/user-attachments/assets/2b091ac4-eb08-4f19-b2c1-c424564962d8" />
+
 
 
 ## Features
