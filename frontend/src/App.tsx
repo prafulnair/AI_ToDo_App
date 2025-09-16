@@ -6,6 +6,7 @@ import Modal from "./components/Modal/Modal";
 import SummaryPanel from "./components/SummaryPanel/SummaryPanel";
 import { useNotify } from "./components/ToastProvider";
 import QuickStats from "./components/QuickStats/QuickStats";
+import Navbar from "./components/Navbar/Navbar";
 
 // Types
 import type { Task, Category } from "./types/task";
@@ -55,6 +56,7 @@ function App() {
   const [isFiltered, setIsFiltered] = useState(false);
   const [summaryData, setSummaryData] = useState<any | null>(null);
   const notify = useNotify();
+  const [isSidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     loadTasks();
@@ -168,110 +170,115 @@ function App() {
     }
   };
 
-  // --- Render ---
-  // 🔹 flatten tasks for stats
   const allTasks = [...tasks, ...categories.flatMap((c) => c.tasks)];
 
   return (
-    <div className="grid grid-cols-3 h-screen bg-gray-100">
-      {/* Left: Card B */}
-      <div className="col-span-1 p-6">
-        <div
-          className="w-full h-full border-2 border-black rounded-md bg-white 
-                     hover:shadow-[8px_8px_0px_rgba(0,0,0,1)] transition-shadow 
-                     flex flex-col space-y-6 p-4"
-        >
-          {/* Card C: Quick Stats */}
-          <QuickStats
-            total={allTasks.length}
-            completed={allTasks.filter((t) => t.status === "done").length}
-            pending={allTasks.filter((t) => t.status !== "done").length}
-          />
+    <div className="flex flex-col h-screen">
+      {/* 🔹 Top Navbar */}
+      <Navbar onToggleSidebar={() => setSidebarOpen(!isSidebarOpen)} />
 
-          {/* Card A: Input */}
-          <div className="border-2 border-black rounded-md bg-white p-4 hover:shadow-[4px_4px_0px_rgba(0,0,0,1)]">
-            <InputArea
-              onTaskSubmit={handleTaskSubmit}
-              onSummarizeToday={async () => {
-                const data = await summarize({ timeframe: "today" });
-                setSummaryData(data);
-              }}
-              onSummarizeWeek={async () => {
-                const data = await summarize({ timeframe: "this_week" });
-                setSummaryData(data);
-              }}
+      {/* 🔹 Main Content Area with top margin */}
+      <div className="grid grid-cols-3 flex-1 bg-gray-100 mt-4 gap-4 px-4">
+        {/* Left Column (cyan card) */}
+        <div className="col-span-1">
+          <div
+            className="w-full h-[90%] border-2 border-black rounded-md 
+                       bg-[#9EE7EB] 
+                       hover:shadow-[8px_8px_0px_rgba(0,0,0,1)] transition-shadow 
+                       flex flex-col space-y-6 p-4"
+          >
+            <QuickStats
+              total={allTasks.length}
+              completed={allTasks.filter((t) => t.status === "done").length}
+              pending={allTasks.filter((t) => t.status !== "done").length}
             />
+
+            <div className="border-2 border-black rounded-md bg-white p-4 hover:shadow-[4px_4px_0px_rgba(0,0,0,1)]">
+              <InputArea
+                onTaskSubmit={handleTaskSubmit}
+                onSummarizeToday={async () => {
+                  const data = await summarize({ timeframe: "today" });
+                  setSummaryData(data);
+                }}
+                onSummarizeWeek={async () => {
+                  const data = await summarize({ timeframe: "this_week" });
+                  setSummaryData(data);
+                }}
+              />
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Right: Task board */}
-      <div
-        className="col-span-2 p-6 overflow-y-auto space-y-4 relative
-                   border-2 border-black rounded-md
-                   bg-[#A5B4FB]
-                   hover:shadow-[8px_8px_0px_rgba(0,0,0,1)] transition-shadow"
-      >
-        {categories.length === 0 && tasks.length === 0 && (
-          <p className="text-gray-800 font-medium text-center">
-            No tasks yet. Add one!
-          </p>
-        )}
+        {/* Right Column (purple card) */}
+        <div className="col-span-2">
+          <div
+            className="w-full h-[90%] border-2 border-black rounded-md  
+                       bg-[#A5B4FB] 
+                       hover:shadow-[8px_8px_0px_rgba(0,0,0,1)] transition-shadow 
+                       p-6 overflow-y-auto space-y-4 relative"
+          >
+            {categories.length === 0 && tasks.length === 0 && (
+              <p className="text-gray-800 font-medium text-center">
+                No tasks yet. Add one!
+              </p>
+            )}
 
-        {tasks.map((task) => (
-          <TaskCard
-            key={task.id}
-            task={task}
-            onDone={handleTaskDone}
-            onDelete={handleTaskDelete}
-          />
-        ))}
+            {tasks.map((task) => (
+              <TaskCard
+                key={task.id}
+                task={task}
+                onDone={handleTaskDone}
+                onDelete={handleTaskDelete}
+              />
+            ))}
 
-        {isFiltered && (
-          <div className="text-center mb-4">
-            <p className="text-sm text-gray-800">🔍 Showing filtered results</p>
-            <button
-              className="text-sm text-blue-700 hover:underline"
-              onClick={() => {
-                loadTasks();
-                setIsFiltered(false);
-              }}
-            >
-              🔙 Back to All Tasks
-            </button>
+            {isFiltered && (
+              <div className="text-center mb-4">
+                <p className="text-sm text-gray-800">🔍 Showing filtered results</p>
+                <button
+                  className="text-sm text-blue-700 hover:underline"
+                  onClick={() => {
+                    loadTasks();
+                    setIsFiltered(false);
+                  }}
+                >
+                  🔙 Back to All Tasks
+                </button>
+              </div>
+            )}
+
+            {categories.map((cat) => (
+              <CategoryCard
+                key={cat.name}
+                name={cat.name}
+                tasks={cat.tasks}
+                onTaskClick={handleTaskClick}
+              />
+            ))}
+
+            {selectedTask && (
+              <Modal onClose={() => setSelectedTask(null)}>
+                <TaskCard
+                  task={selectedTask}
+                  onDone={handleTaskDone}
+                  onDelete={handleTaskDelete}
+                  onClose={() => setSelectedTask(null)}
+                />
+              </Modal>
+            )}
+
+            {summaryData && (
+              <Modal onClose={() => setSummaryData(null)}>
+                <SummaryPanel
+                  summary={summaryData}
+                  tasks={allTasks}
+                  onClose={() => setSummaryData(null)}
+                  onTaskClick={handleTaskClick}
+                />
+              </Modal>
+            )}
           </div>
-        )}
-
-        {categories.map((cat) => (
-          <CategoryCard
-            key={cat.name}
-            name={cat.name}
-            tasks={cat.tasks}
-            onTaskClick={handleTaskClick}
-          />
-        ))}
-
-        {selectedTask && (
-          <Modal onClose={() => setSelectedTask(null)}>
-            <TaskCard
-              task={selectedTask}
-              onDone={handleTaskDone}
-              onDelete={handleTaskDelete}
-              onClose={() => setSelectedTask(null)}
-            />
-          </Modal>
-        )}
-
-        {summaryData && (
-          <Modal onClose={() => setSummaryData(null)}>
-            <SummaryPanel
-              summary={summaryData}
-              tasks={allTasks}
-              onClose={() => setSummaryData(null)}
-              onTaskClick={handleTaskClick}
-            />
-          </Modal>
-        )}
+        </div>
       </div>
     </div>
   );
