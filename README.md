@@ -129,6 +129,7 @@ An AI-assisted task manager with a **FastAPI backend**, **React frontend**, and 
 
 <img width="2126" height="1690" alt="screenshot" src="https://github.com/user-attachments/assets/393a01bd-a3a8-4400-bcf2-82a6ffd6dd7d6" />
 
+
 ## Features
 
 * **Natural task input**: Add todos like `"Meeting Steph at 4"` or `"Pay hydro tomorrow"`.

@@ -9,6 +9,8 @@ from services import TaskService
 from services import TaskService
 from ai_client import parse_command_nlp, summarize_tasks, filter_tasks_with_ai 
 from db import SessionLocal, TaskDB
+from ai_client import detect_intent
+
 
 
 
@@ -45,6 +47,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.post("/nlp/intent")
+def classify_intent(req: NLPCommandReq):
+    try:
+        intent = detect_intent(req.text)
+        return intent
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 @app.post("/tasks")
 def add_task(

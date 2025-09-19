@@ -93,8 +93,20 @@ function App() {
     );
   };
 
-  const handleTaskSubmit = async (text: string) => {
-    try {
+  // --- Intent-aware task submit ---
+const handleTaskSubmit = async (text: string) => {
+  try {
+    // 1. Ask AI what the user meant
+    const intent = await apiFetch<{ intent: string; rationale: string }>(
+      "/nlp/intent",
+      {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      }
+    );
+
+    // 2. If it's a command → refine with /nlp/command
+    if (intent.intent === "command") {
       const cmd = await parseCommand(text);
 
       if (cmd.action === "show") {
@@ -110,21 +122,49 @@ function App() {
         });
         splitAndSet(filtered);
         setIsFiltered(true);
+
+        notify.info(
+          `Showing ${filtered.length} task(s)${
+            cmd.category ? ` in "${cmd.category}"` : ""
+          } ${cmd.timeframe ? `for ${cmd.timeframe}` : ""}`
+        );
         return;
       }
 
       if (cmd.action === "complete_all") {
-        const data = await getTasks();
-        await Promise.all(data.map((t) => markDone(t.id)));
-        await loadTasks();
-        return;
+  const data = await getTasks();
+  let doneCount = 0;
+
+  await Promise.all(
+    data.map(async (t) => {
+      if (t.status !== "done") {
+        try {
+          await markDone(t.id);
+          doneCount++;
+        } catch {
+          // ignore already-done tasks
+        }
       }
+    })
+  );
+
+  await loadTasks();
+
+  if (doneCount > 0) {
+    notify.success(`Marked ${doneCount} task(s) as done`);
+  } else {
+    notify.info("All tasks were already marked as done");
+  }
+  return;
+}
 
       if (cmd.action === "delete_category" && cmd.category) {
         const data = await getTasks();
         const toDelete = data.filter((t) => t.category === cmd.category);
         await Promise.all(toDelete.map((t) => deleteTask(t.id)));
         await loadTasks();
+
+        notify.danger(`Deleted ${toDelete.length} task(s) in "${cmd.category}"`);
         return;
       }
 
@@ -134,17 +174,25 @@ function App() {
           category: cmd.category || undefined,
         });
         setSummaryData(data);
-        notify.warning("Summary generated");
+
+        notify.warning(
+          `Summary generated for ${
+            cmd.category ? `"${cmd.category}" ` : ""
+          }${cmd.timeframe || "all"}`
+        );
         return;
       }
-
-      await addTask(text);
-      await loadTasks();
-      notify.success("Task added!");
-    } catch (err) {
-      console.error("Failed to process input:", err);
     }
-  };
+
+    // 3. Otherwise → treat as plain add task
+    await addTask(text);
+    await loadTasks();
+    notify.success("Task added!");
+  } catch (err) {
+    console.error("Failed to process input:", err);
+    notify.danger("Something went wrong while processing your request");
+  }
+};
 
   const handleTaskClick = (task: Task) => setSelectedTask(task);
 

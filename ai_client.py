@@ -498,3 +498,46 @@ Return JSON list of task IDs to keep, like:
         return [t for t in tasks if t["id"] in keep_ids]
     except Exception:
         return tasks  # fallback: return unfilteredss
+    
+
+
+def detect_intent(user_text: str) -> dict:
+    """
+    Classify intent of user_text before deciding how to handle.
+    Returns JSON:
+    {
+        "intent": "add_task" | "command",
+        "rationale": "why this decision was made"
+    }
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    genai.configure(api_key=api_key)
+
+    model = genai.GenerativeModel(
+        model_name=_MODEL,
+        generation_config={"response_mime_type": "application/json"},
+    )
+
+    prompt = f"""
+    You are an API. Return JSON only.
+
+    Decide if the user is trying to ADD A TASK or issue a COMMAND.
+
+    Definitions:
+    - "add_task": adding a new todo item (like "buy milk tomorrow").
+    - "command": control requests (like "show all tasks", "summarize today", "delete category work", "complete all").
+
+    Input: "{user_text}"
+
+    Return JSON exactly:
+    {{
+    "intent": "add_task" | "command",
+    "rationale": "short one-sentence reason"
+    }}
+    """
+
+    resp = model.generate_content(prompt)
+    text_out = _get_resp_text(resp)
+    return json.loads(text_out)
