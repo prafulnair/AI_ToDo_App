@@ -1,4 +1,3 @@
-# backend/similarity.py
 """
 Category reconciliation utilities.
 
@@ -6,22 +5,27 @@ Purpose
 -------
 Given a model-proposed category (free-form) and a list of existing categories,
 pick the best existing category when it makes sense — otherwise keep the
-proposed one (allowing "organic" categories).
+proposed one (allowing "organic" categories). Optionally, allow creating a new
+canonical category from a synonym (e.g., "groceries" -> "Errand") even if it
+doesn't already exist in the user's set.
 
 Strategy (in order)
 -------------------
 1) Exact match (case/spacing/punct normalized)
 2) Synonym map (configurable)
-3) Semantic similarity via SentenceTransformers (optional, lazy, configurable)
+   - If canonical synonym exists in `existing` → map to it
+   - Else, if allowed, create canonical (pretty-cased) name
+3) Semantic similarity via SentenceTransformers (optional, lazy)
 4) Fuzzy string similarity (difflib)
 
-If none exceed thresholds, we keep the proposed category to preserve organic growth.
+If none exceed thresholds, keep the proposed value.
 
-Environment variables
----------------------
-SENTENCE_MODEL_NAME   : HuggingFace model id (default: "sentence-transformers/all-MiniLM-L6-v2")
-SIMILARITY_MODEL_MIN  : Float [0..1], minimum cosine similarity to accept (default: 0.58)
-SIMILARITY_FUZZY_MIN  : Float [0..1], minimum difflib ratio to accept (default: 0.88)
+Environment variables (optional)
+--------------------------------
+SENTENCE_MODEL_NAME              : HuggingFace model id (default: "sentence-transformers/all-MiniLM-L6-v2")
+SIMILARITY_MODEL_MIN             : Float [0..1], minimum cosine similarity (default: 0.58)
+SIMILARITY_FUZZY_MIN             : Float [0..1], minimum difflib ratio (default: 0.88)
+SIMILARITY_ALLOW_CREATE_FROM_SYNONYM : "1" or "0" (default "1")
 
 Dependencies (optional)
 -----------------------
@@ -62,6 +66,11 @@ def _original_case_lookup(existing: Sequence[str]) -> Dict[str, str]:
         if k not in out:
             out[k] = e
     return out
+
+
+def _pretty_case(norm: str) -> str:
+    """Title-case a normalized category like 'errand' -> 'Errand'."""
+    return " ".join(w.capitalize() for w in norm.split())
 
 
 # ---------------------------
@@ -112,6 +121,8 @@ _DEFAULT_SYNONYMS: Mapping[str, str] = {
     "shopping": "errand",
     "groceries": "errand",
     "grocery": "errand",
+    "market": "errand",
+    "supermarket": "errand",
     "school": "personal",
     "study": "personal",
 }
@@ -128,39 +139,19 @@ def reconcile_category(
     synonyms: Optional[Mapping[str, str]] = None,
     threshold_model: Optional[float] = None,
     threshold_fuzzy: Optional[float] = None,
+    allow_create_from_synonym: Optional[bool] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Reconcile a model-proposed category with existing categories.
-
-    Parameters
-    ----------
-    proposed : str
-        Free-form category proposed by an upstream model.
-    existing : Sequence[str]
-        Existing category names (user's current set). Order is preserved.
-    synonyms : Mapping[str, str], optional
-        Extra synonym map (normalized keys/values). Merged on top of defaults.
-    threshold_model : float, optional
-        Min cosine similarity to accept a semantic match. Defaults from env
-        SIMILARITY_MODEL_MIN or 0.58.
-    threshold_fuzzy : float, optional
-        Min difflib ratio to accept fuzzy match. Defaults from env
-        SIMILARITY_FUZZY_MIN or 0.88.
 
     Returns
     -------
     (final_category, debug)
         final_category : str
-            Either one of `existing` (original casing) or the original `proposed`.
+            Either one of `existing` (original casing) or a new pretty-cased
+            canonical from a synonym (if allowed) or the original `proposed`.
         debug : dict
             Diagnostics: chosen method, scores, thresholds, model name, etc.
-
-    Notes
-    -----
-    - We only map to an existing category if confidence is high enough.
-      Otherwise we keep `proposed` to allow organic category creation.
-    - If `proposed` already matches an existing (after normalization), we return
-      that exact existing (preserving original casing).
     """
     dbg: Dict[str, Any] = {
         "proposed": proposed,
@@ -190,9 +181,16 @@ def reconcile_category(
         if threshold_fuzzy is not None
         else float(os.getenv("SIMILARITY_FUZZY_MIN", "0.88"))
     )
+    allow_create_from_synonym = (
+        bool(int(os.getenv("SIMILARITY_ALLOW_CREATE_FROM_SYNONYM", "1")))
+        if allow_create_from_synonym is None
+        else allow_create_from_synonym
+    )
+
     dbg["thresholds"] = {
         "model": threshold_model,
         "fuzzy": threshold_fuzzy,
+        "allow_create_from_synonym": allow_create_from_synonym,
     }
 
     norm_prop = _norm(proposed)
@@ -208,16 +206,20 @@ def reconcile_category(
     # 2) Synonym map
     syn = dict(_DEFAULT_SYNONYMS)
     if synonyms:
-        # user-supplied synonyms take precedence
         for k, v in synonyms.items():
             syn[_norm(k)] = _norm(v)
+
     if norm_prop in syn:
         mapped_norm = syn[norm_prop]
-        # Only map if the canonical synonym already exists in user's set
         if mapped_norm in existing_norm:
             final_cat = canon_map[mapped_norm]
-            dbg["method"] = "synonym"
-            dbg["scores"]["synonym"] = f"{norm_prop}→{mapped_norm}"
+            dbg["method"] = "synonym_existing"
+            dbg["scores"]["synonym"] = f"{norm_prop}->{mapped_norm}"
+            return final_cat, dbg
+        if allow_create_from_synonym:
+            final_cat = _pretty_case(mapped_norm)
+            dbg["method"] = "synonym_new"
+            dbg["scores"]["synonym"] = f"{norm_prop}->{mapped_norm}"
             return final_cat, dbg
 
     # 3) Semantic similarity (SentenceTransformers) — optional
@@ -242,7 +244,6 @@ def reconcile_category(
                 dbg["method"] = "model"
                 return final_cat, dbg
         except Exception as exc:
-            # Silent degrade to fuzzy; record for debugging.
             dbg["model"]["error"] = str(exc)
 
     # 4) Fuzzy fallback

@@ -1,4 +1,6 @@
-import os, json, re
+import os
+import json
+import re
 from datetime import datetime
 from typing import Optional, Dict, Any, Sequence
 from collections import Counter
@@ -7,7 +9,8 @@ import google.generativeai as genai
 import dateparser
 from dotenv import load_dotenv
 
-from backend.similarity import reconcile_category  # <-- NEW IMPORT
+# Adjust import path if your layout differs. You used backend.similarity previously.
+from backend.similarity import reconcile_category
 
 load_dotenv()
 
@@ -48,11 +51,28 @@ def _parse_due_iso(s: Optional[str]) -> Optional[datetime]:
 
 
 def _norm(s: str) -> str:
-    """Lightweight normalization for category strings."""
     s = (s or "").strip().lower()
     s = re.sub(r"[_\-\s]+", " ", s)
     s = re.sub(r"[^\w\s]", "", s)
     return s
+
+
+def _coarse_hint(text: str) -> Optional[str]:
+    """
+    Ultra-light hinting for obviously misclassified phrases.
+    Keeps it minimal to avoid hardcoding everything.
+    """
+    t = _norm(text)
+    shopping_markers = [
+        "buy", "purchase", "order", "shop", "shopping", "grocery", "groceries",
+        "supermarket", "market", "milk", "bread", "egg", "eggs", "vegetable",
+        "vegetables", "veggies", "onion", "garlic", "ginger", "paste",
+        "tomato", "chicken", "meat", "beef", "pork", "fish", "detergent",
+        "toilet paper", "paper towels", "shampoo", "soap"
+    ]
+    if any(w in t for w in shopping_markers):
+        return "Errand"
+    return None
 
 
 # -------------------------
@@ -65,9 +85,8 @@ def categorize_and_enrich(
 ) -> Dict[str, Any]:
     """
     Calls Gemini to classify the task and infer priority/due date.
-    Supports dynamic categories by passing in current existing categories.
-    The model either selects one of the existing categories (if appropriate)
-    or proposes a new category (<= 3 words). We then post-process to reconcile.
+    Then reconciles with user's existing categories (or creates a canonical one
+    from synonyms if allowed).
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -77,34 +96,37 @@ def categorize_and_enrich(
 
     model = genai.GenerativeModel(
         model_name=_MODEL,
-        generation_config={
-            "response_mime_type": "application/json",
-        },
+        generation_config={"response_mime_type": "application/json"},
     )
 
-    existing_str = ", ".join(sorted(existing_categories or [])) or "(none)"
+    existing_categories = list(existing_categories or [])
+    existing_str = ", ".join(sorted(existing_categories)) or "(none)"
+
+    hint = _coarse_hint(text)  # e.g., "Errand" for grocery-like input
 
     user = f"""
 You are an API. Return JSON only—no prose, no markdown.
 
 Given a single to-do text, infer:
-- category_proposed: a short category string (<= 3 words). You MUST first try to reuse an existing category if it's semantically close.
-- used_existing: boolean — true if you reused an existing category name from the list, false if you introduced a new one.
-- priority: integer 1..5 (1=lowest, 5=highest) based on urgency/importance implied by the text
-- due_dt_iso: an ISO 8601 datetime string with timezone offset if a due time/date is clearly implied, else null
-- rationale: very short reason (one sentence)
+- category_proposed: a short category string (<= 3 words). Prefer obvious high-level families like Errand, Work, Health, Family, Personal, etc.
+- used_existing: boolean — true if you reused a name from the existing list; false if you introduced a new one.
+- priority: integer 1..5 (1=lowest, 5=highest) based on urgency/importance implied by the text.
+- due_dt_iso: an ISO 8601 datetime string with timezone offset if a due time/date is clearly implied, else null.
+- rationale: very short reason (one sentence).
 
 Context:
 - current_time_iso: "{now_iso}"
 - timezone: "{TZ}"
 - existing_categories: [{existing_str}]
+- hint_category: "{hint or ''}"  # If non-empty, treat as a strong hint (e.g., groceries → Errand).
 
 Rules:
-- Prefer reusing an existing category if it's a reasonable semantic match (e.g., "exercise" ≈ "health").
-- If only a time is given (e.g., "by 17:30"), assume it refers to today in the given timezone; if that time already passed today, roll to next day.
-- If only a day is given (e.g., "tomorrow", "next Monday"), pick 09:00 local time unless a time is stated.
+- If the text clearly implies shopping or groceries, do NOT classify as Health; use Errand (or an existing close equivalent).
+- If only a time is given (e.g., "by 17:30"), assume today local time; if that time passed, roll to next day.
+- If only a day is given (e.g., "tomorrow", "next Monday"), default to 09:00 local time unless a time is stated.
 - Always return ISO 8601 with timezone offset (e.g., 2025-09-03T17:30:00-04:00).
 - Never return a datetime in the past relative to current_time_iso.
+- Return JSON only, exactly as specified.
 
 Input text:
 "{text.strip()}"
@@ -120,7 +142,6 @@ Return JSON with exactly this shape:
 """
 
     resp = model.generate_content(user)
-
     pf = getattr(resp, "prompt_feedback", None)
     if pf and getattr(pf, "block_reason", None):
         raise RuntimeError(f"blocked_by_safety: {pf.block_reason}")
@@ -149,19 +170,24 @@ Return JSON with exactly this shape:
     print("DEBUG — Raw category from Gemini:", proposed_raw)
     print("DEBUG — Existing categories:", existing_categories)
 
-    existing_categories = existing_categories or []
-    final_category = proposed_raw
-    used_existing = bool(data.get("used_existing"))
+    # One clean reconciliation pass
+    final_category, rec_dbg = reconcile_category(
+        proposed=proposed_raw,
+        existing=existing_categories,
+        allow_create_from_synonym=None,  # use env default (on by default)
+    )
+    print("DEBUG — Reconcile info:", rec_dbg)
 
-    if not used_existing and existing_categories:
-        # NEW: Use reconcile_category for semantic/synonym/fuzzy matching
-        final_category, rec_dbg = reconcile_category(
-            proposed=proposed_raw,
-            existing=existing_categories,
-        )
-        print("DEBUG — Reconcile info:", rec_dbg)
+    # Coarse hint override (very targeted; only triggers on obvious grocery/shopping)
+    if hint and _norm(hint) != _norm(final_category):
+        # If the hint differs strongly from the final and Gemini proposed something like "health"
+        # for a clear grocery-like text, prefer the hint.
+        final_category = hint
 
     print("DEBUG — Final category chosen:", final_category)
+
+    # used_existing is true if we ended up with an existing category name
+    used_existing = _norm(final_category) in {_norm(c) for c in existing_categories}
 
     return {
         "category": final_category.strip(),
@@ -202,7 +228,6 @@ Rules:
 - If user says things like "finish all", "mark everything done" → action=complete_all.
 - If user says "delete {{"some category"}}" → action=delete_category with category.
 - If user says "show all ..." → action=show with filters.
-- If category mentioned doesn’t match existing ones, still return it but mark rationale.
 - If timeframe not specified, set to "all".
 - If user says "summarize" (e.g. "summarize today") → action=summarize.
 - Always include a rationale.
@@ -239,8 +264,8 @@ Return JSON:
 
 def _fallback_narrative(task_slice: list[dict], intent: dict) -> str:
     now = datetime.now()
-    open_tasks = [t for t in task_slice if str(t.get("status","open")) != "done"]
-    completed = len([t for t in task_slice if str(t.get("status","open")) == "done"])
+    open_tasks = [t for t in task_slice if str(t.get("status", "open")) != "done"]
+    completed = len([t for t in task_slice if str(t.get("status", "open")) == "done"])
 
     def _dt(t):
         v = t.get("due_dt")
@@ -250,28 +275,36 @@ def _fallback_narrative(task_slice: list[dict], intent: dict) -> str:
             return None
 
     due_today = [t for t in open_tasks if _dt(t) and _dt(t).date() == now.date()]
-    overdue   = [t for t in open_tasks if _dt(t) and _dt(t) < now]
+    overdue = [t for t in open_tasks if _dt(t) and _dt(t) < now]
 
     top_cat = ""
     if open_tasks:
-        c = Counter([str(t.get("category","")).strip() or "Uncategorized" for t in open_tasks])
+        c = Counter([str(t.get("category", "")).strip() or "Uncategorized" for t in open_tasks])
         top_cat = c.most_common(1)[0][0]
 
     focus = ""
     pick = None
-    if overdue: pick = overdue[0]
-    elif due_today: pick = due_today[0]
+    if overdue:
+        pick = overdue[0]
+    elif due_today:
+        pick = due_today[0]
     else:
         hp = [t for t in open_tasks if int(t.get("priority", 0)) >= 4]
-        if hp: pick = hp[0]
-    if pick: focus = f' Focus first on “{pick.get("text","")}”.'
+        if hp:
+            pick = hp[0]
+    if pick:
+        focus = f' Focus first on “{pick.get("text", "")}”.'
 
     tf = intent.get("timeframe") or "your list"
     bits = []
-    if open_tasks: bits.append(f"{len(open_tasks)} open")
-    if completed:  bits.append(f"{completed} completed")
-    if overdue:    bits.append(f"{len(overdue)} overdue")
-    if due_today:  bits.append(f"{len(due_today)} due today")
+    if open_tasks:
+        bits.append(f"{len(open_tasks)} open")
+    if completed:
+        bits.append(f"{completed} completed")
+    if overdue:
+        bits.append(f"{len(overdue)} overdue")
+    if due_today:
+        bits.append(f"{len(due_today)} due today")
     counters = ", ".join(bits) if bits else "nothing new"
 
     cat_line = f" {top_cat} has the most items." if top_cat else ""
@@ -325,7 +358,7 @@ Return JSON:
         raise RuntimeError(f"invalid_json_from_gemini: {e}")
 
     nar = (data.get("narrative") or "").strip()
-    md  = (data.get("markdown")  or "").strip()
+    md = (data.get("markdown") or "").strip()
     if not nar or "Structured summary" in nar or "Structured summary" in md or len(nar) < 20:
         data["narrative"] = _fallback_narrative(task_slice, intent)
 
