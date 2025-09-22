@@ -1,13 +1,13 @@
-# ai_client.py
 import os, json, re
 from datetime import datetime
-from typing import Optional, Dict, Any, Sequence, Tuple
-import difflib
+from typing import Optional, Dict, Any, Sequence
 from collections import Counter
 
 import google.generativeai as genai
 import dateparser
 from dotenv import load_dotenv
+
+from backend.similarity import reconcile_category  # <-- NEW IMPORT
 
 load_dotenv()
 
@@ -55,55 +55,6 @@ def _norm(s: str) -> str:
     return s
 
 
-# A tiny alias/synonym map to nudge close matches
-_SYNONYMS = {
-    "exercise": "health",
-    "fitness": "health",
-    "gym": "health",
-    "workout": "health",
-    "wellness": "health",
-    "meeting": "work",
-    "office": "work",
-    "job": "work",
-    "career": "work",     # depending on how you want to split, map to "work"
-    "errands": "errand",
-    "shopping": "errand",
-    "groceries": "errand",
-    "school": "personal",
-    "study": "personal",
-}
-
-
-def _closest_existing(
-    proposed: str, existing: Sequence[str], threshold: float = 0.72
-) -> Optional[str]:
-    """
-    Returns an existing category name if it's sufficiently similar to 'proposed'.
-    Uses difflib ratio + synonym nudges.
-    """
-    if not proposed or not existing:
-        return None
-
-    p_norm = _norm(proposed)
-    # Synonym direct map
-    if p_norm in _SYNONYMS and _SYNONYMS[p_norm] in { _norm(e) for e in existing }:
-        # Return the *actual* casing from existing
-        target_norm = _SYNONYMS[p_norm]
-        for e in existing:
-            if _norm(e) == target_norm:
-                return e
-
-    # Fuzzy match
-    best: Tuple[float, Optional[str]] = (0.0, None)
-    for e in existing:
-        ratio = difflib.SequenceMatcher(None, p_norm, _norm(e)).ratio()
-        if ratio > best[0]:
-            best = (ratio, e)
-    if best[0] >= threshold:
-        return best[1]
-    return None
-
-
 # -------------------------
 # Gemini call
 # -------------------------
@@ -116,19 +67,7 @@ def categorize_and_enrich(
     Calls Gemini to classify the task and infer priority/due date.
     Supports dynamic categories by passing in current existing categories.
     The model either selects one of the existing categories (if appropriate)
-    or proposes a new category (<= 3 words). We then post-process to map
-    similar proposals back to an existing category using fuzzy matching.
-
-    Returns:
-        {
-          "category": str,           # final category (existing or new)
-          "priority": int (1..5),
-          "due_dt": datetime | None,
-          "raw_category": str,       # model's proposed category (for debugging/telemetry)
-          "used_existing": bool      # whether it mapped to an existing one
-        }
-    Raises:
-        RuntimeError on API/config/JSON/validation errors.
+    or proposes a new category (<= 3 words). We then post-process to reconcile.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -206,42 +145,38 @@ Return JSON with exactly this shape:
 
     due_dt = _parse_due_iso(data.get("due_dt_iso"))
 
-    # Post-process: if the model proposed something new, try to map it to an existing category
+    # --- DEBUG LOGGING ---
+    print("DEBUG — Raw category from Gemini:", proposed_raw)
+    print("DEBUG — Existing categories:", existing_categories)
+
     existing_categories = existing_categories or []
     final_category = proposed_raw
     used_existing = bool(data.get("used_existing"))
 
-    if not used_existing:
-        mapped = _closest_existing(proposed_raw, existing_categories)
-        if mapped:
-            final_category = mapped
-            used_existing = True
+    if not used_existing and existing_categories:
+        # NEW: Use reconcile_category for semantic/synonym/fuzzy matching
+        final_category, rec_dbg = reconcile_category(
+            proposed=proposed_raw,
+            existing=existing_categories,
+        )
+        print("DEBUG — Reconcile info:", rec_dbg)
 
-    # Always normalize presentation minimally (strip whitespace)
-    final_category = final_category.strip()
+    print("DEBUG — Final category chosen:", final_category)
 
     return {
-        "category": final_category,      # <-- final canonical category to persist
+        "category": final_category.strip(),
         "priority": priority,
         "due_dt": due_dt,
-        "raw_category": proposed_raw,    # debugging/telemetry if you want it
+        "raw_category": proposed_raw,
         "used_existing": used_existing,
     }
 
 
-# ai_client.py (add near bottom)
+# -------------------------
+# NLP command parsing
+# -------------------------
 
 def parse_command_nlp(text: str, existing_categories: list[str]) -> dict:
-    """
-    Use Gemini to parse a natural language command.
-    Returns structured JSON:
-      {
-        "action": "show|complete_all|delete_category",
-        "category": "work|health|..." | null,
-        "timeframe": "today|tomorrow|this_week|all" | null,
-        "rationale": "string"
-      }
-    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set")
@@ -260,7 +195,7 @@ Parse this user command: "{text}"
 
 Context:
 - Existing categories: {existing_categories}
-- Valid actions: ["show", "complete_all", "delete_category"]
+- Valid actions: ["show", "complete_all", "delete_category", "summarize"]
 - Valid timeframes: ["today", "tomorrow", "this_week", "all"]
 
 Rules:
@@ -269,6 +204,7 @@ Rules:
 - If user says "show all ..." → action=show with filters.
 - If category mentioned doesn’t match existing ones, still return it but mark rationale.
 - If timeframe not specified, set to "all".
+- If user says "summarize" (e.g. "summarize today") → action=summarize.
 - Always include a rationale.
 
 Return JSON:
@@ -281,7 +217,6 @@ Return JSON:
 """
 
     resp = model.generate_content(prompt)
-
     text_out = _get_resp_text(resp)
     if not text_out:
         raise RuntimeError("empty_response_from_gemini")
@@ -291,7 +226,6 @@ Return JSON:
     except Exception as e:
         raise RuntimeError(f"invalid_json_from_gemini: {e}")
 
-    # enforce keys
     for k in ("action", "category", "timeframe", "rationale"):
         if k not in data:
             raise RuntimeError(f"missing_key_in_ai_response: {k}")
@@ -324,7 +258,6 @@ def _fallback_narrative(task_slice: list[dict], intent: dict) -> str:
         top_cat = c.most_common(1)[0][0]
 
     focus = ""
-    # Pick one item to nudge: overdue > due_today > high priority
     pick = None
     if overdue: pick = overdue[0]
     elif due_today: pick = due_today[0]
@@ -346,9 +279,6 @@ def _fallback_narrative(task_slice: list[dict], intent: dict) -> str:
 
 
 def summarize_tasks(tasks: list[dict], intent: dict) -> dict:
-    """
-    Summarize tasks into structured KPIs + highlights + a friendly narrative.
-    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set")
@@ -362,18 +292,16 @@ def summarize_tasks(tasks: list[dict], intent: dict) -> dict:
     task_slice = tasks[:100]
 
     prompt = f"""
-You are an API. Return JSON only — no markdown in fields unless asked.
+You are an API. Return JSON only.
 
-Create a *real* summary of these tasks. Replace all example values with actual content.
-The "narrative" must be 1–3 sentences, plain text, friendly, concise, and specific to the data.
-Do NOT return placeholders like "### Structured summary..." anywhere.
+Create a summary of these tasks. The "narrative" must be 1–3 sentences, plain text, friendly, concise, and specific.
 
 Context:
 - Intent: {json.dumps(intent, ensure_ascii=False)}
 - Current time: {now_iso}
-- Tasks (JSON list): {json.dumps(task_slice, default=str, ensure_ascii=False)}
+- Tasks: {json.dumps(task_slice, default=str, ensure_ascii=False)}
 
-Return JSON with exactly this shape (fill with real values):
+Return JSON:
 {{
   "headline": "string",
   "kpis": {{ "open": 0, "completed": 0, "overdue": 0, "due_today": 0 }},
@@ -382,7 +310,7 @@ Return JSON with exactly this shape (fill with real values):
   "urgent_ids": [1],
   "overdue_ids": [2],
   "markdown": "- bullet one\\n- bullet two",
-  "narrative": "Plain conversational recap (no markdown)"
+  "narrative": "Plain conversational recap"
 }}
 """
 
@@ -396,7 +324,6 @@ Return JSON with exactly this shape (fill with real values):
     except Exception as e:
         raise RuntimeError(f"invalid_json_from_gemini: {e}")
 
-    # Safety net: if model returns junk/placeholder narrative, craft one
     nar = (data.get("narrative") or "").strip()
     md  = (data.get("markdown")  or "").strip()
     if not nar or "Structured summary" in nar or "Structured summary" in md or len(nar) < 20:
@@ -404,67 +331,12 @@ Return JSON with exactly this shape (fill with real values):
 
     return data
 
-# Extend parser to include summarize
-def parse_command_nlp(text: str, existing_categories: list[str]) -> dict:
-    """
-    Extended parser: now also supports 'summarize'.
-    """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set")
-    genai.configure(api_key=api_key)
 
-    model = genai.GenerativeModel(
-        model_name=_MODEL,
-        generation_config={"response_mime_type": "application/json"},
-    )
-
-    prompt = f"""
-You are an API. Return JSON only.
-
-Parse this user command: "{text}"
-
-Context:
-- Existing categories: {existing_categories}
-- Valid actions: ["show", "complete_all", "delete_category", "summarize"]
-- Valid timeframes: ["today", "tomorrow", "this_week", "all"]
-
-Rules:
-- If user says "summarize" (e.g. "summarize today", "summarize social work this week") → action=summarize with category/timeframe.
-- Otherwise rules are same as before.
-
-Return JSON:
-{{
-  "action": "summarize",
-  "category": "social",
-  "timeframe": "today",
-  "rationale": "User asked to summarize today's social tasks"
-}}
-"""
-
-    resp = model.generate_content(prompt)
-    text_out = _get_resp_text(resp)
-    if not text_out:
-        raise RuntimeError("empty_response_from_gemini")
-
-    try:
-        data = json.loads(text_out)
-    except Exception as e:
-        raise RuntimeError(f"invalid_json_from_gemini: {e}")
-
-    for k in ("action", "category", "timeframe", "rationale"):
-        if k not in data:
-            raise RuntimeError(f"missing_key_in_ai_response: {k}")
-
-    return data
-
+# -------------------------
+# Intent detection
+# -------------------------
 
 def filter_tasks_with_ai(tasks: list[dict], category_query: str) -> list[dict]:
-    """
-    Use Gemini to filter tasks relevant to a free-text category query.
-    E.g., "wife related work", "all meetings", "social errands".
-    Returns a smaller task list (subset of input).
-    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set")
@@ -486,7 +358,7 @@ Query: "{category_query}"
 Tasks:
 {json.dumps(task_slice, ensure_ascii=False)}
 
-Return JSON list of task IDs to keep, like:
+Return JSON:
 {{ "keep_ids": [1, 3, 7] }}
 """
     resp = model.generate_content(prompt)
@@ -497,19 +369,10 @@ Return JSON list of task IDs to keep, like:
         keep_ids = set(data.get("keep_ids", []))
         return [t for t in tasks if t["id"] in keep_ids]
     except Exception:
-        return tasks  # fallback: return unfilteredss
-    
+        return tasks
 
 
 def detect_intent(user_text: str) -> dict:
-    """
-    Classify intent of user_text before deciding how to handle.
-    Returns JSON:
-    {
-        "intent": "add_task" | "command",
-        "rationale": "why this decision was made"
-    }
-    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set")
@@ -521,22 +384,22 @@ def detect_intent(user_text: str) -> dict:
     )
 
     prompt = f"""
-    You are an API. Return JSON only.
+You are an API. Return JSON only.
 
-    Decide if the user is trying to ADD A TASK or issue a COMMAND.
+Decide if the user is trying to ADD A TASK or issue a COMMAND.
 
-    Definitions:
-    - "add_task": adding a new todo item (like "buy milk tomorrow").
-    - "command": control requests (like "show all tasks", "summarize today", "delete category work", "complete all").
+Definitions:
+- "add_task": adding a new todo item (like "buy milk tomorrow").
+- "command": control requests (like "show all tasks", "summarize today", "delete category work", "complete all").
 
-    Input: "{user_text}"
+Input: "{user_text}"
 
-    Return JSON exactly:
-    {{
-    "intent": "add_task" | "command",
-    "rationale": "short one-sentence reason"
-    }}
-    """
+Return JSON:
+{{
+  "intent": "add_task" | "command",
+  "rationale": "short one-sentence reason"
+}}
+"""
 
     resp = model.generate_content(prompt)
     text_out = _get_resp_text(resp)

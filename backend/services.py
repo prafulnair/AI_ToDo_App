@@ -3,9 +3,9 @@ from datetime import datetime
 from typing import List, Optional
 from sqlalchemy import and_, or_
 
-from db import SessionLocal, init_db, TaskDB
-from models import Task
-from ai_client import categorize_and_enrich
+from backend.db import SessionLocal, init_db, TaskDB
+from backend.models import Task
+from backend.ai_client import categorize_and_enrich
 
 init_db()
 
@@ -42,6 +42,7 @@ class TaskService:
             created_at=datetime.now(),
             session_id=self.session_id,
         )
+        print("SAVE DEBUG — raw:", meta["raw_category"], "| final:", meta["category"])
         self.db.add(db_obj)
         self.db.commit()
         self.db.refresh(db_obj)

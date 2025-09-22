@@ -5,8 +5,10 @@ from datetime import datetime, timedelta
 from rich.console import Console
 from rich.table import Table
 
-from services import TaskService
-from utils import parse_command
+from backend.utils import parse_command
+from backend.ai_client import categorize_and_enrich
+from backend.services import TaskService
+from backend.api import app
 
 # 👇 Give the CLI a dedicated session
 CLI_SESSION = "local"
