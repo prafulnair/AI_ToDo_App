@@ -28,6 +28,7 @@ frontend/.env.production.local
 # System files
 .DS_Store
 Thumbs.db
+tasks.db
 
 # IDE/editor
 .vscode/
