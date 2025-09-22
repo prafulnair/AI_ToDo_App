@@ -4,12 +4,12 @@ from typing import Optional
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from services import TaskService
+from backend.services import TaskService
 
-from services import TaskService
-from ai_client import parse_command_nlp, summarize_tasks, filter_tasks_with_ai 
-from db import SessionLocal, TaskDB
-from ai_client import detect_intent
+from backend.services import TaskService
+from backend.ai_client import parse_command_nlp, summarize_tasks, filter_tasks_with_ai 
+from backend.db import SessionLocal, TaskDB
+from backend.ai_client import detect_intent
 
 
 
