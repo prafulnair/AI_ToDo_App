@@ -29,7 +29,8 @@ frontend/.env.production.local
 .DS_Store
 Thumbs.db
 tasks.db
-
+dump_backend_code.py
+backend_dump.txt
 # IDE/editor
 .vscode/
 .idea/
