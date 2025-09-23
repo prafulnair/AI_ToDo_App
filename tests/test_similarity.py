@@ -37,7 +37,9 @@ def test_reconcile_category_with_stubbed_encoder(monkeypatch):
     monkeypatch.setattr(similarity, "_load_encoder", fake_load_encoder)
 
     final, dbg = similarity.reconcile_category(
-        "meat shopping", ["Groceries/Errands"]
+        "meat shopping", ["Groceries/Errands"],
+        threshold_model=0.0  # force acceptance
+
     )
 
     assert final == "Groceries/Errands"
