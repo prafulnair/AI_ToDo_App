@@ -1,3 +1,4 @@
+# ai_client.py
 import os
 import json
 import re
@@ -9,7 +10,7 @@ import google.generativeai as genai
 import dateparser
 from dotenv import load_dotenv
 
-# Adjust import path if your layout differs. You used backend.similarity previously.
+# Path B: local reconciliation happens AFTER Gemini proposes a raw category
 from backend.similarity import reconcile_category
 
 load_dotenv()
@@ -51,32 +52,15 @@ def _parse_due_iso(s: Optional[str]) -> Optional[datetime]:
 
 
 def _norm(s: str) -> str:
+    """Lightweight normalization for comparisons."""
     s = (s or "").strip().lower()
     s = re.sub(r"[_\-\s]+", " ", s)
     s = re.sub(r"[^\w\s]", "", s)
     return s
 
 
-def _coarse_hint(text: str) -> Optional[str]:
-    """
-    Ultra-light hinting for obviously misclassified phrases.
-    Keeps it minimal to avoid hardcoding everything.
-    """
-    t = _norm(text)
-    shopping_markers = [
-        "buy", "purchase", "order", "shop", "shopping", "grocery", "groceries",
-        "supermarket", "market", "milk", "bread", "egg", "eggs", "vegetable",
-        "vegetables", "veggies", "onion", "garlic", "ginger", "paste",
-        "tomato", "chicken", "meat", "beef", "pork", "fish", "detergent",
-        "toilet paper", "paper towels", "shampoo", "soap"
-    ]
-    if any(w in t for w in shopping_markers):
-        return "Errand"
-    return None
-
-
 # -------------------------
-# Gemini call
+# Gemini (RAW, creative pass)
 # -------------------------
 
 def categorize_and_enrich(
@@ -84,9 +68,12 @@ def categorize_and_enrich(
     existing_categories: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Calls Gemini to classify the task and infer priority/due date.
-    Then reconciles with user's existing categories (or creates a canonical one
-    from synonyms if allowed).
+    Path B:
+      1) Gemini proposes a raw category (no knowledge of user's existing categories).
+      2) Local reconciliation maps it to an existing category if confidence is high,
+         else we keep the organic proposal.
+
+    Also infers priority (1..5) and due_dt (datetime or None).
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -99,34 +86,25 @@ def categorize_and_enrich(
         generation_config={"response_mime_type": "application/json"},
     )
 
-    existing_categories = list(existing_categories or [])
-    existing_str = ", ".join(sorted(existing_categories)) or "(none)"
-
-    hint = _coarse_hint(text)  # e.g., "Errand" for grocery-like input
-
+    # IMPORTANT: We do NOT feed existing categories to Gemini here.
+    # We want a truly "organic" raw proposal from the model.
     user = f"""
 You are an API. Return JSON only—no prose, no markdown.
 
 Given a single to-do text, infer:
-- category_proposed: a short category string (<= 3 words). Prefer obvious high-level families like Errand, Work, Health, Family, Personal, etc.
-- used_existing: boolean — true if you reused a name from the existing list; false if you introduced a new one.
+- category_proposed: a short category string (<= 3 words). Use natural, human categories
+  like Errands/Groceries, Work, Health, Family, Personal, Finance, Travel, Study, etc.
+  Pick the most *sensible* everyday label for the task; do not overfit or invent niche labels.
 - priority: integer 1..5 (1=lowest, 5=highest) based on urgency/importance implied by the text.
 - due_dt_iso: an ISO 8601 datetime string with timezone offset if a due time/date is clearly implied, else null.
 - rationale: very short reason (one sentence).
 
-Context:
-- current_time_iso: "{now_iso}"
-- timezone: "{TZ}"
-- existing_categories: [{existing_str}]
-- hint_category: "{hint or ''}"  # If non-empty, treat as a strong hint (e.g., groceries → Errand).
-
 Rules:
-- If the text clearly implies shopping or groceries, do NOT classify as Health; use Errand (or an existing close equivalent).
-- If only a time is given (e.g., "by 17:30"), assume today local time; if that time passed, roll to next day.
+- If only a time is given (e.g., "by 17:30"), assume today in timezone "{TZ}"; if that time already passed,
+  roll to next day.
 - If only a day is given (e.g., "tomorrow", "next Monday"), default to 09:00 local time unless a time is stated.
 - Always return ISO 8601 with timezone offset (e.g., 2025-09-03T17:30:00-04:00).
-- Never return a datetime in the past relative to current_time_iso.
-- Return JSON only, exactly as specified.
+- Never return a datetime in the past relative to "{now_iso}".
 
 Input text:
 "{text.strip()}"
@@ -134,7 +112,6 @@ Input text:
 Return JSON with exactly this shape:
 {{
   "category_proposed": "string",
-  "used_existing": true,
   "priority": 1,
   "due_dt_iso": "2025-09-02T18:00:00-04:00" | null,
   "rationale": "string"
@@ -142,6 +119,7 @@ Return JSON with exactly this shape:
 """
 
     resp = model.generate_content(user)
+
     pf = getattr(resp, "prompt_feedback", None)
     if pf and getattr(pf, "block_reason", None):
         raise RuntimeError(f"blocked_by_safety: {pf.block_reason}")
@@ -155,7 +133,8 @@ Return JSON with exactly this shape:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"invalid_json_from_gemini: {e}")
 
-    for k in ("category_proposed", "used_existing", "priority", "due_dt_iso"):
+    # Relaxed: we do NOT require "used_existing" from the model in Path B
+    for k in ("category_proposed", "priority", "due_dt_iso"):
         if k not in data:
             raise RuntimeError(f"missing_key_in_gemini_json: {k}")
 
@@ -166,27 +145,23 @@ Return JSON with exactly this shape:
 
     due_dt = _parse_due_iso(data.get("due_dt_iso"))
 
-    # --- DEBUG LOGGING ---
+    # --- Debug before reconciliation
+    existing_categories = list(existing_categories or [])
     print("DEBUG — Raw category from Gemini:", proposed_raw)
     print("DEBUG — Existing categories:", existing_categories)
 
-    # One clean reconciliation pass
+    # -------------------------
+    # Local reconciliation pass
+    # -------------------------
     final_category, rec_dbg = reconcile_category(
         proposed=proposed_raw,
         existing=existing_categories,
-        allow_create_from_synonym=None,  # use env default (on by default)
+        # thresholds/synonyms configurable via env or similarity.py defaults
     )
     print("DEBUG — Reconcile info:", rec_dbg)
-
-    # Coarse hint override (very targeted; only triggers on obvious grocery/shopping)
-    if hint and _norm(hint) != _norm(final_category):
-        # If the hint differs strongly from the final and Gemini proposed something like "health"
-        # for a clear grocery-like text, prefer the hint.
-        final_category = hint
-
     print("DEBUG — Final category chosen:", final_category)
+    print(f"SAVE DEBUG — raw: {proposed_raw} | final: {final_category}")
 
-    # used_existing is true if we ended up with an existing category name
     used_existing = _norm(final_category) in {_norm(c) for c in existing_categories}
 
     return {
@@ -366,7 +341,7 @@ Return JSON:
 
 
 # -------------------------
-# Intent detection
+# Intent detection and AI filter
 # -------------------------
 
 def filter_tasks_with_ai(tasks: list[dict], category_query: str) -> list[dict]:
