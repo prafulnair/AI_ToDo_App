@@ -10,7 +10,7 @@ import google.generativeai as genai
 import dateparser
 from dotenv import load_dotenv
 
-# Path B: local reconciliation happens AFTER Gemini proposes a raw category
+# Path B: Gemini proposes raw; local reconciliation *may* map to existing.
 from backend.similarity import reconcile_category
 
 load_dotenv()
@@ -54,13 +54,13 @@ def _parse_due_iso(s: Optional[str]) -> Optional[datetime]:
 def _norm(s: str) -> str:
     """Lightweight normalization for comparisons."""
     s = (s or "").strip().lower()
-    s = re.sub(r"[_\-\s]+", " ", s)
-    s = re.sub(r"[^\w\s]", "", s)
-    return s
+    s = re.sub(r"[^\w\s]+", " ", s)
+    s = re.sub(r"[_\s]+", " ", s)
+    return s.strip()
 
 
 # -------------------------
-# Gemini (RAW, creative pass)
+# Gemini (RAW, creative pass) + Local reconciliation
 # -------------------------
 
 def categorize_and_enrich(
@@ -69,9 +69,9 @@ def categorize_and_enrich(
 ) -> Dict[str, Any]:
     """
     Path B:
-      1) Gemini proposes a raw category (no knowledge of user's existing categories).
-      2) Local reconciliation maps it to an existing category if confidence is high,
-         else we keep the organic proposal.
+      1) Gemini proposes a raw category (without knowledge of the user's existing categories).
+      2) Local reconciliation maps it to an existing category if confidence is high.
+         Otherwise, keep the organic proposal.
 
     Also infers priority (1..5) and due_dt (datetime or None).
     """
@@ -86,15 +86,13 @@ def categorize_and_enrich(
         generation_config={"response_mime_type": "application/json"},
     )
 
-    # IMPORTANT: We do NOT feed existing categories to Gemini here.
-    # We want a truly "organic" raw proposal from the model.
+    # IMPORTANT: Do NOT pass existing categories to Gemini. We want organic proposals.
     user = f"""
 You are an API. Return JSON only—no prose, no markdown.
 
 Given a single to-do text, infer:
-- category_proposed: a short category string (<= 3 words). Use natural, human categories
-  like Errands/Groceries, Work, Health, Family, Personal, Finance, Travel, Study, etc.
-  Pick the most *sensible* everyday label for the task; do not overfit or invent niche labels.
+- category_proposed: a short category string (<= 3 words). Use sensible, everyday labels.
+  Do not invent obscure or overly niche labels; choose what a normal person would call it.
 - priority: integer 1..5 (1=lowest, 5=highest) based on urgency/importance implied by the text.
 - due_dt_iso: an ISO 8601 datetime string with timezone offset if a due time/date is clearly implied, else null.
 - rationale: very short reason (one sentence).
@@ -133,7 +131,6 @@ Return JSON with exactly this shape:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"invalid_json_from_gemini: {e}")
 
-    # Relaxed: we do NOT require "used_existing" from the model in Path B
     for k in ("category_proposed", "priority", "due_dt_iso"):
         if k not in data:
             raise RuntimeError(f"missing_key_in_gemini_json: {k}")
@@ -150,13 +147,11 @@ Return JSON with exactly this shape:
     print("DEBUG — Raw category from Gemini:", proposed_raw)
     print("DEBUG — Existing categories:", existing_categories)
 
-    # -------------------------
-    # Local reconciliation pass
-    # -------------------------
+    # Local reconciliation (no synonyms, no hints)
     final_category, rec_dbg = reconcile_category(
         proposed=proposed_raw,
         existing=existing_categories,
-        # thresholds/synonyms configurable via env or similarity.py defaults
+        # thresholds are taken from env or defaults inside similarity.py
     )
     print("DEBUG — Reconcile info:", rec_dbg)
     print("DEBUG — Final category chosen:", final_category)

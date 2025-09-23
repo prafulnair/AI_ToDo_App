@@ -1,25 +1,25 @@
 """
-Category reconciliation utilities.
+Category reconciliation (organic; no synonyms, no static mappings).
 
-Purpose
--------
-Given a model-proposed category (free-form) and a list of existing categories,
-pick the best existing category when it makes sense — otherwise keep the
-proposed one (allowing "organic" categories). Optionally, allow creating a new
-canonical category from a synonym (e.g., "groceries" -> "Errand") even if it
-doesn't already exist in the user's set.
+Goal
+----
+Let the LLM propose free-form categories. Only merge into an *existing*
+category when there's strong evidence they are the same label:
+1) Exact match after normalization (case/spacing/punct, simple plural handling)
+2) Semantic similarity via SentenceTransformers (optional, lazy, cached)
+3) Fuzzy string similarity (difflib) as a last resort
 
-Strategy (in order)
--------------------
-1) Exact match (case/spacing/punct normalized)
-2) Synonym map (configurable)
-   - If canonical synonym exists in `existing` → map to it
-   - Else, if allowed, create canonical (pretty-cased) name
-3) Semantic similarity via SentenceTransformers (optional, lazy)
-   (with embedding cache for efficiency)
-4) Fuzzy string similarity (difflib)
+If nothing is convincing, KEEP the proposed category (allow "organic" growth).
 
-If none exceed thresholds, keep the proposed value.
+Environment (optional)
+----------------------
+SENTENCE_MODEL_NAME     : HF model id (default: "sentence-transformers/all-MiniLM-L6-v2")
+SIMILARITY_MODEL_MIN    : Float [0..1], cosine threshold (default: 0.58)
+SIMILARITY_FUZZY_MIN    : Float [0..1], difflib ratio threshold (default: 0.88)
+
+Install (optional)
+------------------
+pip install sentence-transformers
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import os
 import re
 import difflib
 from functools import lru_cache
-from typing import Dict, Mapping, Optional, Sequence, Tuple, Any
+from typing import Any, Dict, Sequence, Tuple
 
 Vector = Sequence[float]
 
@@ -38,10 +38,10 @@ Vector = Sequence[float]
 # ---------------------------
 
 def _norm(s: str) -> str:
-    """Normalize category strings for comparison."""
+    """Normalize category strings for comparison (case/spacing/punct)."""
     s = (s or "").strip().lower()
-    s = re.sub(r"[^\w\s]+", " ", s)        # convert punctuation/separators to spaces
-    s = re.sub(r"[_\s]+", " ", s)          # collapse whitespace/underscores
+    s = re.sub(r"[^\w\s]+", " ", s)   # convert punctuation/separators to spaces
+    s = re.sub(r"[_\s]+", " ", s)     # collapse underscores/whitespace
     return s.strip()
 
 
@@ -61,7 +61,7 @@ def _norm_with_plural(s: str) -> str:
 
 
 def _original_case_lookup(existing: Sequence[str]) -> Dict[str, str]:
-    """Map normalized -> original casing for existing categories."""
+    """Map normalized -> original casing for existing categories (stable first-wins)."""
     out: Dict[str, str] = {}
     for e in existing:
         k = _norm_with_plural(e)
@@ -70,24 +70,23 @@ def _original_case_lookup(existing: Sequence[str]) -> Dict[str, str]:
     return out
 
 
-def _pretty_case(norm: str) -> str:
-    """Title-case a normalized category like 'errand' -> 'Errand'."""
-    return " ".join(w.capitalize() for w in norm.split())
-
-
 # ---------------------------
 # Optional embedding backend
 # ---------------------------
 
 @lru_cache(maxsize=1)
 def _load_encoder():
-    """Lazy-load SentenceTransformer. Returns (encode_fn, model_name) or (None, None)."""
+    """
+    Lazy-load SentenceTransformer. Returns (encode_fn, model_name) or (None, None)
+    if not available.
+    """
     model_id = os.getenv("SENTENCE_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
     try:
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer  # type: ignore
         model = SentenceTransformer(model_id)
 
         def _encode(texts: Sequence[str]) -> Any:
+            # Normalize embeddings so cosine == dot
             return model.encode(list(texts), normalize_embeddings=True)
 
         return _encode, model_id
@@ -97,7 +96,7 @@ def _load_encoder():
 
 @lru_cache(maxsize=64)
 def _encode_existing_tuple(model_name: str, existing_norm: Tuple[str, ...]):
-    """Cache embeddings for an existing category set."""
+    """Cache embeddings for a fixed set of existing categories."""
     encode, _ = _load_encoder()
     if encode is None:
         return None
@@ -109,31 +108,6 @@ def _cosine(a: Vector, b: Vector) -> float:
 
 
 # ---------------------------
-# Default synonyms
-# ---------------------------
-
-_DEFAULT_SYNONYMS: Mapping[str, str] = {
-    "exercise": "health",
-    "fitness": "health",
-    "gym": "health",
-    "workout": "health",
-    "wellness": "health",
-    "meeting": "work",
-    "office": "work",
-    "job": "work",
-    "career": "work",
-    "errands": "errand",
-    "shopping": "errand",
-    "groceries": "errand",
-    "grocery": "errand",
-    "market": "errand",
-    "supermarket": "errand",
-    "school": "personal",
-    "study": "personal",
-}
-
-
-# ---------------------------
 # Public API
 # ---------------------------
 
@@ -141,11 +115,20 @@ def reconcile_category(
     proposed: str,
     existing: Sequence[str],
     *,
-    synonyms: Optional[Mapping[str, str]] = None,
-    threshold_model: Optional[float] = None,
-    threshold_fuzzy: Optional[float] = None,
-    allow_create_from_synonym: Optional[bool] = None,
+    threshold_model: float | None = None,
+    threshold_fuzzy: float | None = None,
 ) -> Tuple[str, Dict[str, Any]]:
+    """
+    Reconcile a model-proposed category with the user's existing set.
+
+    Returns
+    -------
+    (final_category, debug)
+        final_category : str
+            Either an existing category (original casing) or the original proposed value.
+        debug : dict
+            Diagnostics with method, scores, thresholds, model info.
+    """
     dbg: Dict[str, Any] = {
         "proposed": proposed,
         "existing": list(existing),
@@ -163,6 +146,7 @@ def reconcile_category(
         dbg["method"] = "noop-no-existing"
         return proposed.strip(), dbg
 
+    # Thresholds (env or defaults)
     threshold_model = (
         threshold_model
         if threshold_model is not None
@@ -173,17 +157,7 @@ def reconcile_category(
         if threshold_fuzzy is not None
         else float(os.getenv("SIMILARITY_FUZZY_MIN", "0.88"))
     )
-    allow_create_from_synonym = (
-        bool(int(os.getenv("SIMILARITY_ALLOW_CREATE_FROM_SYNONYM", "1")))
-        if allow_create_from_synonym is None
-        else allow_create_from_synonym
-    )
-
-    dbg["thresholds"] = {
-        "model": threshold_model,
-        "fuzzy": threshold_fuzzy,
-        "allow_create_from_synonym": allow_create_from_synonym,
-    }
+    dbg["thresholds"] = {"model": threshold_model, "fuzzy": threshold_fuzzy}
 
     norm_prop = _norm_with_plural(proposed)
     canon_map = _original_case_lookup(existing)
@@ -195,24 +169,7 @@ def reconcile_category(
         dbg["method"] = "exact"
         return final_cat, dbg
 
-    # 2) Synonym map
-    syn = dict(_DEFAULT_SYNONYMS)
-    if synonyms:
-        for k, v in synonyms.items():
-            syn[_norm(k)] = _norm(v)
-
-    if norm_prop in syn:
-        mapped_norm = syn[norm_prop]
-        if mapped_norm in existing_norm:
-            final_cat = canon_map[mapped_norm]
-            dbg["method"] = "synonym_existing"
-            return final_cat, dbg
-        if allow_create_from_synonym:
-            final_cat = _pretty_case(mapped_norm)
-            dbg["method"] = "synonym_new"
-            return final_cat, dbg
-
-    # 3) Semantic similarity
+    # 2) Semantic similarity (if available)
     encode, model_name = _load_encoder()
     if encode is not None:
         try:
@@ -234,7 +191,7 @@ def reconcile_category(
         except Exception as exc:
             dbg["model"]["error"] = str(exc)
 
-    # 4) Fuzzy fallback
+    # 3) Fuzzy fallback
     best_ratio, best_key = 0.0, None
     for k in existing_norm:
         ratio = difflib.SequenceMatcher(None, norm_prop, k).ratio()
@@ -246,6 +203,6 @@ def reconcile_category(
         dbg["method"] = "fuzzy"
         return final_cat, dbg
 
-    # 5) Keep proposed
+    # 4) Keep proposed (organic)
     dbg["method"] = "keep_proposed"
     return proposed.strip(), dbg
