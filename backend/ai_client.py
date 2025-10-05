@@ -17,9 +17,9 @@ load_dotenv()
 
 TZ = os.getenv("LOCAL_TZ", "America/Toronto")
 now_iso = datetime.now().isoformat()
-_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
 
-
+print("DEBUG: GEMINI_API_KEY visible?", bool(os.getenv("GEMINI_API_KEY")))
 # -------------------------
 # Helpers
 # -------------------------
