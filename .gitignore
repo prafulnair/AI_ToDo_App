@@ -38,3 +38,6 @@ tasks.db
 # If you only want to keep npm lock file
 # (ignore yarn.lock just in case someone uses yarn locally)
 /frontend/yarn.lock
+
+backend_dump.txt
+dump_backend_code.py
