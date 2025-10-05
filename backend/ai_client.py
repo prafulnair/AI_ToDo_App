@@ -17,7 +17,7 @@ load_dotenv()
 
 TZ = os.getenv("LOCAL_TZ", "America/Toronto")
 now_iso = datetime.now().isoformat()
-_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 # -------------------------
