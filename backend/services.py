@@ -6,6 +6,7 @@ from sqlalchemy import and_, or_
 from backend.db import SessionLocal, init_db, TaskDB
 from backend.models import Task
 from backend.ai_client import categorize_and_enrich
+from backend.embeddings import nearest_category_for_text
 
 init_db()
 
@@ -34,15 +35,29 @@ class TaskService:
         # ask AI to classify, with merging against existing categories
         meta = categorize_and_enrich(text, existing_categories=existing)
 
+        # embedding-based snap-to-nearest category (if similar enough)
+        assigned_category = meta["category"]
+        try:
+            nearest = nearest_category_for_text(
+                text=text,
+                db=self.db,
+                session_id=self.session_id,
+            )
+            if nearest is not None:
+                assigned_category, sim = nearest
+                print(f"EMBED — snapped to '{assigned_category}' (sim={sim:.3f})")
+        except Exception as exc:
+            print("EMBED — disabled or failed:", exc)
+
         db_obj = TaskDB(
             text=text,
-            category=meta["category"],
+            category=assigned_category,
             priority=meta["priority"],
             due_dt=meta["due_dt"],
             created_at=datetime.now(),
             session_id=self.session_id,
         )
-        print("SAVE DEBUG — raw:", meta["raw_category"], "| final:", meta["category"])
+        print("SAVE DEBUG — raw:", meta["raw_category"], "| final:", assigned_category)
         self.db.add(db_obj)
         self.db.commit()
         self.db.refresh(db_obj)

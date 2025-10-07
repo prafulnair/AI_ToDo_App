@@ -87,6 +87,111 @@ def categorize_and_enrich(
     )
 
     # IMPORTANT: We do NOT feed existing categories to Gemini here.
+    # We want an organic label proposal from the model.
+    user = f"""
+You are an API. Return JSON only—no prose, no markdown.
+
+Given a single to-do text, infer:
+- category_proposed: a short, specific label (<= 3 words) that reflects the task’s theme or project.
+  Prefer concrete names when implied (e.g., "Jake’s birthday", "pet care", "garden plan").
+  Avoid generic labels like "Work" or "Personal" if a more specific phrase exists in the text.
+- priority: integer 1..5 (1=lowest, 5=highest) based on urgency/importance implied by the text.
+- due_dt_iso: an ISO 8601 datetime string with timezone offset if a due time/date is clearly implied, else null.
+- rationale: very short reason (one sentence).
+
+Rules:
+- If only a time is given (e.g., "by 17:30"), assume today in timezone "{TZ}"; if that time already passed,
+  roll to next day.
+- If only a day is given (e.g., "tomorrow", "next Monday"), default to 09:00 local time unless a time is stated.
+- Always return ISO 8601 with timezone offset (e.g., 2025-09-03T17:30:00-04:00).
+- Never return a datetime in the past relative to "{now_iso}".
+
+Input text:
+"{text.strip()}"
+
+Return JSON with exactly this shape:
+{{
+  "category_proposed": "string",
+  "priority": 1,
+  "due_dt_iso": "2025-09-02T18:00:00-04:00" | null,
+  "rationale": "string"
+}}
+"""
+
+    resp = model.generate_content(user)
+
+    pf = getattr(resp, "prompt_feedback", None)
+    if pf and getattr(pf, "block_reason", None):
+        raise RuntimeError(f"blocked_by_safety: {pf.block_reason}")
+
+    text_out = _get_resp_text(resp)
+    if not text_out:
+        raise RuntimeError("empty_response_from_gemini")
+
+    try:
+        data = json.loads(text_out)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"invalid_json_from_gemini: {e}")
+
+    for k in ("category_proposed", "priority", "due_dt_iso"):
+        if k not in data:
+            raise RuntimeError(f"missing_key_in_gemini_json: {k}")
+
+    proposed_raw = str(data["category_proposed"]).strip()
+    priority = int(data["priority"])
+    if priority < 1 or priority > 5:
+        raise RuntimeError("priority_out_of_range")
+
+    due_dt = _parse_due_iso(data.get("due_dt_iso"))
+
+    # --- Debug before reconciliation
+    existing_categories = list(existing_categories or [])
+    print("DEBUG — Raw category from Gemini:", proposed_raw)
+    print("DEBUG — Existing categories:", existing_categories)
+
+    # Local reconciliation pass
+    final_category, rec_dbg = reconcile_category(
+        proposed=proposed_raw,
+        existing=existing_categories,
+    )
+    print("DEBUG — Reconcile info:", rec_dbg)
+    print("DEBUG — Final category chosen:", final_category)
+    print(f"SAVE DEBUG — raw: {proposed_raw} | final: {final_category}")
+
+    used_existing = _norm(final_category) in {_norm(c) for c in existing_categories}
+
+    return {
+        "category": final_category.strip(),
+        "priority": priority,
+        "due_dt": due_dt,
+        "raw_category": proposed_raw,
+        "used_existing": used_existing,
+    }
+
+def _reconcile_category(
+    proposed: str,
+    existing: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Path B:
+      1) Gemini proposes a raw category (no knowledge of user's existing categories).
+      2) Local reconciliation maps it to an existing category if confidence is high,
+         else we keep the organic proposal.
+
+    Also infers priority (1..5) and due_dt (datetime or None).
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+
+    genai.configure(api_key=api_key)
+
+    model = genai.GenerativeModel(
+        model_name=_MODEL,
+        generation_config={"response_mime_type": "application/json"},
+    )
+
+    # IMPORTANT: We do NOT feed existing categories to Gemini here.
     # We want a truly "organic" raw proposal from the model.
     user = f"""
 You are an API. Return JSON only—no prose, no markdown.
