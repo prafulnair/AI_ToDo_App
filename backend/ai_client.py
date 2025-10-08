@@ -450,38 +450,16 @@ Return JSON:
 # -------------------------
 
 def filter_tasks_with_ai(tasks: list[dict], category_query: str) -> list[dict]:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set")
-    genai.configure(api_key=api_key)
-
-    model = genai.GenerativeModel(
-        model_name=_MODEL,
-        generation_config={"response_mime_type": "application/json"},
-    )
-
-    task_slice = tasks[:100]
-    prompt = f"""
-You are an API. Return JSON only.
-
-From this list of tasks, select only those relevant to the user query.
-
-Query: "{category_query}"
-
-Tasks:
-{json.dumps(task_slice, ensure_ascii=False)}
-
-Return JSON:
-{{ "keep_ids": [1, 3, 7] }}
-"""
-    resp = model.generate_content(prompt)
-    text_out = _get_resp_text(resp)
-
+    """
+    Replaced the LLM filter with local vector search.
+    Uses sentence-transformers to rank tasks by semantic similarity to the query.
+    """
     try:
-        data = json.loads(text_out)
-        keep_ids = set(data.get("keep_ids", []))
-        return [t for t in tasks if t["id"] in keep_ids]
-    except Exception:
+        tau = float(os.getenv("SEARCH_TAU", "0.55"))
+        topk = int(os.getenv("SEARCH_TOPK", "50"))
+        return filter_tasks_by_query(tasks[:100], category_query, tau=tau, topk=topk)
+    except Exception as exc:
+        print("Vector search filter failed; returning original tasks. Error:", exc)
         return tasks
 
 

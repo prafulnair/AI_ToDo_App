@@ -10,3 +10,5 @@ class Task(BaseModel):
     due_dt: Optional[datetime] = None
     status: Literal["open", "done"] = "open"
     created_at: datetime
+    # Pydantic v2: allow validation from ORM attributes
+    model_config = {"from_attributes": True}

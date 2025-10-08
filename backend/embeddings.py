@@ -96,3 +96,41 @@ def nearest_category_for_text(
     if best_cat is not None and best_sim >= tau:
         return best_cat, best_sim
     return None
+
+def _task_text_for_search(t: Dict) -> str:
+    # include category hint if present; short & robust
+    cat = (t.get("category") or "").strip()
+    txt = (t.get("text") or "").strip()
+    return f"{txt} [label:{cat}]" if cat else txt
+
+def filter_tasks_by_query(
+    tasks: List[Dict],
+    query: str,
+    *,
+    tau: float = float(os.getenv("SEARCH_TAU", "0.55")),
+    topk: int = int(os.getenv("SEARCH_TOPK", "50")),
+) -> List[Dict]:
+    """
+    Vector-search over tasks for a free-form query.
+    Returns a filtered list (top-k above tau), preserving original task dicts.
+    Falls back to returning `tasks` unchanged if encoder is unavailable.
+    """
+    encode, _ = _load_encoder()
+    if encode is None:
+        return tasks
+
+    if not query or not tasks:
+        return tasks
+
+    qv = encode([query])[0]
+    corpus = [_task_text_for_search(t) for t in tasks]
+    tv = encode(corpus)
+
+    scored: List[Tuple[float, Dict]] = []
+    for vec, t in zip(tv, tasks):
+        sim = _cosine(qv, vec)
+        if sim >= tau:
+            scored.append((sim, t))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [t for _, t in scored[:topk]] or tasks  # graceful fallback if nothing passes tau

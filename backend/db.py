@@ -6,7 +6,7 @@ from datetime import datetime
 
 DB_PATH = os.getenv("TODO_DB_PATH", "sqlite:///tasks.db")
 engine = create_engine(DB_PATH, echo=False, future=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 Base = declarative_base()
 

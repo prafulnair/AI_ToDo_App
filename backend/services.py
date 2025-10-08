@@ -7,6 +7,8 @@ from backend.db import SessionLocal, init_db, TaskDB
 from backend.models import Task
 from backend.ai_client import categorize_and_enrich
 from backend.embeddings import nearest_category_for_text
+from backend.category_cleanup import cleanup_categories
+import os
 
 init_db()
 
@@ -17,8 +19,8 @@ class TaskService:
         self.session_id = session_id  # stick to one session per service
 
     def _to_task(self, obj: TaskDB) -> Task:
-        # Pydantic (v2) ignores extra fields like session_id by default
-        return Task.model_validate(obj.__dict__)
+        # Pydantic v2: use model_config.from_attributes = True in Task
+        return Task.model_validate(obj)
 
     def add_task(self, text: str) -> Task:
         # collect existing categories for this session
@@ -32,10 +34,11 @@ class TaskService:
             )
         ]
 
-        # ask AI to classify, with merging against existing categories
+        # ask AI to classify (free-form), then we'll reconcile locally
         meta = categorize_and_enrich(text, existing_categories=existing)
 
-        # embedding-based snap-to-nearest category (if similar enough)
+        # 🔒 snap-to-nearest only if similarity is strong enough
+        assign_min = float(os.getenv("ASSIGN_MIN_SIM", "0.72"))  # default gate
         assigned_category = meta["category"]
         try:
             nearest = nearest_category_for_text(
@@ -44,8 +47,12 @@ class TaskService:
                 session_id=self.session_id,
             )
             if nearest is not None:
-                assigned_category, sim = nearest
-                print(f"EMBED — snapped to '{assigned_category}' (sim={sim:.3f})")
+                name, sim = nearest
+                if sim >= assign_min:
+                    assigned_category = name
+                    print(f"EMBED — snapped to '{assigned_category}' (sim={sim:.3f} ≥ {assign_min})")
+                else:
+                    print(f"EMBED — kept '{assigned_category}' (nearest='{name}', sim={sim:.3f} < {assign_min})")
         except Exception as exc:
             print("EMBED — disabled or failed:", exc)
 
@@ -61,6 +68,13 @@ class TaskService:
         self.db.add(db_obj)
         self.db.commit()
         self.db.refresh(db_obj)
+
+        # background cleanup (MERGE ONLY — hiding disabled for now)
+        try:
+            cleanup_categories(self.db, self.session_id)
+        except Exception as exc:
+            print("Category cleanup skipped:", exc)
+
         return self._to_task(db_obj)
 
     def list_tasks(self, category: Optional[str] = None) -> List[Task]:
