@@ -127,6 +127,7 @@ MIT -->
 An AI-assisted task manager with a **FastAPI backend**, **React frontend**, and **Postgres persistence**. Tasks are added in natural language, enriched with AI (categories, priorities, due dates), and summarized into daily or weekly insights.
 
 ---
+<img width="501" height="815" alt="image" src="https://github.com/user-attachments/assets/ef5640f5-ba9d-481d-a3a3-0e84b1037856" />
 
 <img width="2228" height="1840" alt="image" src="https://github.com/user-attachments/assets/b8e8cb7f-b562-4d58-8f88-d1828c505d38" />
 
