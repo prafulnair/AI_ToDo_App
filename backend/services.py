@@ -8,6 +8,7 @@ from backend.models import Task
 from backend.ai_client import categorize_and_enrich
 from backend.embeddings import nearest_category_for_text
 from backend.category_cleanup import cleanup_categories
+from backend.category_manager import update_meta
 import os
 
 init_db()
@@ -74,6 +75,18 @@ class TaskService:
             cleanup_categories(self.db, self.session_id)
         except Exception as exc:
             print("Category cleanup skipped:", exc)
+
+        # background cleanup (MERGE ONLY — hiding disabled for now)
+        try:
+            cleanup_categories(self.db, self.session_id)
+        except Exception as exc:
+            print("Category cleanup skipped:", exc)
+
+        # NEW: update metadata for this category (centroid, samples, keywords, fit)
+        try:
+            update_meta(self.db, self.session_id, assigned_category)
+        except Exception as exc:
+            print("Meta update skipped:", exc)
 
         return self._to_task(db_obj)
 
