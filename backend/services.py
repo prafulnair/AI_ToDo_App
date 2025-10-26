@@ -8,7 +8,7 @@ from backend.models import Task
 from backend.ai_client import categorize_and_enrich
 from backend.embeddings import nearest_category_for_text
 from backend.category_cleanup import cleanup_categories
-from backend.category_manager import update_meta
+from backend.category_manager import update_meta, consider_rename
 import os
 
 init_db()
@@ -88,7 +88,24 @@ class TaskService:
         except Exception as exc:
             print("Meta update skipped:", exc)
 
+        
+        # NEW: update metadata for this category (centroid, samples, keywords, fit)
+        try:
+            update_meta(self.db, self.session_id, assigned_category)
+        except Exception as exc:
+            print("Meta update skipped:", exc)
+
+        # NEW: consider umbrella rename if current label is too narrow
+        try:
+            new_label = consider_rename(self.db, self.session_id, assigned_category)
+            if new_label and new_label != assigned_category:
+                assigned_category = new_label  # reflect in local var for any immediate logs
+        except Exception as exc:
+            print("Rename check skipped:", exc)
+
         return self._to_task(db_obj)
+    
+    
 
     def list_tasks(self, category: Optional[str] = None) -> List[Task]:
         q = self.db.query(TaskDB).filter(TaskDB.session_id == self.session_id)
