@@ -92,9 +92,10 @@ def categorize_and_enrich(
 You are an API. Return JSON only—no prose, no markdown.
 
 Given a single to-do text, infer:
-- category_proposed: a short, specific label (<= 3 words) that reflects the task’s theme or project.
-  Prefer concrete names when implied (e.g., "Jake’s birthday", "pet care", "garden plan").
-  Avoid generic labels like "Work" or "Personal" if a more specific phrase exists in the text.
+- category_proposed: an event/project-level label (≤ 3 words) that can umbrella related tasks over days.
+  Prefer broader descriptors over single-item nouns. Good: "Airport pickup (wife)", "Music night — invites".
+  Bad: "Airport flowers", "Send mail". Again, these are just examples for your context.
+  If multiple phrasings fit, pick the one most likely to cover future follow-ups on the same topic.
 - priority: integer 1..5 (1=lowest, 5=highest) based on urgency/importance implied by the text.
 - due_dt_iso: an ISO 8601 datetime string with timezone offset if a due time/date is clearly implied, else null.
 - rationale: very short reason (one sentence).
